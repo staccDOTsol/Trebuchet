@@ -57,6 +57,42 @@ function makeConnection() {
 // ---------------------------------------------------------------------------
 // RPC retry helper — public RPCs often return stale data after a tx confirms.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Preflight-lag guard
+// ---------------------------------------------------------------------------
+//
+// Load-balanced RPC pools (Triton, Helius, ...) can hand out a blockhash from
+// one node and simulate the transaction on another that hasn't seen it yet.
+// web3.js surfaces that as "Simulation failed" with an EMPTY log list. A real
+// program failure always carries logs. So: on a log-less simulation failure,
+// resend once without preflight — the cluster validates it for real, and a
+// genuinely bad transaction still fails (with on-chain logs) at confirm time.
+const FINALIZED_OPTS = Object.freeze({ commitment: 'finalized' });
+function isLoglessSimulationFailure(err) {
+  const logs = err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null;
+  return /simulation failed/i.test(String(err && err.message || '')) && (!logs || logs.length === 0);
+}
+async function splCall(label, run) {
+  try {
+    return await run(FINALIZED_OPTS);
+  } catch (err) {
+    if (!isLoglessSimulationFailure(err)) throw err;
+    console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
+    return run({ ...FINALIZED_OPTS, skipPreflight: true, maxRetries: 5 });
+  }
+}
+async function umiCall(label, run) {
+  try {
+    return await run(false);
+  } catch (err) {
+    const msg = String(err && err.message || '');
+    const logs = err && Array.isArray(err.logs) ? err.logs : (err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null);
+    if (!/simulation failed|blockhash not found/i.test(msg) || (logs && logs.length > 0)) throw err;
+    console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
+    return run(true);
+  }
+}
+
 async function withRpcRetry(fn, { maxRetries = 5, baseDelayMs = 1000 } = {}) {
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -305,16 +341,17 @@ export async function createTokenWithMetaplex({
 
     // Create mint using standard SPL token first
     console.log('Creating SPL token mint...');
-    const mint = await createMint(
+    const mintKp = mintKeypair ?? Keypair.generate();
+    const mint = await splCall('create mint', (opts) => createMint(
       connection,
       tempWallet,
       tempWallet.publicKey, // mint authority
       null, // freeze authority (null = no freeze)
       9, // decimals
-      mintKeypair ?? undefined, // searched keypair, or undefined for random
-      { commitment: 'finalized' },
+      mintKp, // searched keypair, or a fresh random one (stable across a preflight retry)
+      opts,
       TOKEN_PROGRAM_ID
-    );
+    ));
     console.log('Mint created:', mint.toString());
     progress({ stage: 'mint_created', tokenMint: mint.toString() });
     
@@ -325,7 +362,7 @@ export async function createTokenWithMetaplex({
     const mintPubkey = umiPublicKey(mint.toString());
     
     // Create metadata for the existing token
-    await createV1(umi, {
+    await umiCall('create metadata', (skipPreflight) => createV1(umi, {
       mint: mintPubkey,
       authority: umi.identity,
       name,
@@ -334,7 +371,7 @@ export async function createTokenWithMetaplex({
       sellerFeeBasisPoints: percentAmount(0), // 0% royalty for fungible tokens
       decimals: 9,
       tokenStandard: TokenStandard.Fungible,
-    }).sendAndConfirm(umi);
+    }).sendAndConfirm(umi, { send: { skipPreflight } }));
     
     console.log('Metadata account created successfully');
     progress({ stage: 'metadata_account_created', tokenMint: mint.toString(), metadataUri, imageUri });
@@ -344,24 +381,24 @@ export async function createTokenWithMetaplex({
     
     // Create associated token account (with RPC retry for stale reads)
     console.log('Creating associated token account...');
-    const tokenAccount = await withRpcRetry(() => getOrCreateAssociatedTokenAccount(
+    const tokenAccount = await withRpcRetry(() => splCall('create token account', (opts) => getOrCreateAssociatedTokenAccount(
       connection,
       tempWallet,
       mint,
       tempWallet.publicKey,
       false,
       'finalized',
-      { commitment: 'finalized' },
+      opts,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
-    ));
+    )));
     console.log('Token account created:', tokenAccount.address.toString());
     
     // Mint the total supply
     console.log('Minting total supply...');
     const totalTokens = BigInt(totalSupply) * (10n ** 9n);
     
-    const mintSig = await mintTo(
+    const mintSig = await splCall('mint supply', (opts) => mintTo(
       connection,
       tempWallet,
       mint,
@@ -369,9 +406,9 @@ export async function createTokenWithMetaplex({
       tempWallet.publicKey,
       totalTokens,
       [],
-      { commitment: 'finalized' },
+      opts,
       TOKEN_PROGRAM_ID
-    );
+    ));
     
     console.log('Mint transaction signature:', mintSig);
     progress({ stage: 'supply_minted', tokenMint: mint.toString(), txId: mintSig });
@@ -386,7 +423,7 @@ export async function createTokenWithMetaplex({
     // 1. Renounce mint authority (no more tokens can be minted)
     console.log('Renouncing mint authority...');
     try {
-      const renounceMintAuthSig = await setAuthority(
+      const renounceMintAuthSig = await splCall('renounce mint authority', (opts) => setAuthority(
         connection,
         tempWallet,
         mint,
@@ -394,9 +431,9 @@ export async function createTokenWithMetaplex({
         AuthorityType.MintTokens,
         null, // New authority (null = renounce)
         [],
-        { commitment: 'finalized' },
+        opts,
         TOKEN_PROGRAM_ID
-      );
+      ));
       console.log('Mint authority renounced:', renounceMintAuthSig);
       progress({
         stage: 'mint_authority_revoked',
@@ -754,24 +791,24 @@ export async function finishTokenCreation({
 
   // --- 2. ATA + supply (hard idempotency guard: never double-mint) ---
   if (!status.supplyMinted) {
-    const tokenAccount = await withRpcRetry(() => getOrCreateAssociatedTokenAccount(
+    const tokenAccount = await withRpcRetry(() => splCall('create token account', (opts) => getOrCreateAssociatedTokenAccount(
       connection,
       tempWallet,
       mint,
       tempWallet.publicKey,
       false,
       'finalized',
-      { commitment: 'finalized' },
+      opts,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
-    ));
+    )));
     const r = await landTxWithRetry({
       label: 'finish: mint supply',
       alreadyDone: async () => {
         const info = await getMint(connection, mint, 'finalized', TOKEN_PROGRAM_ID);
         return info.supply >= totalTokens;
       },
-      send: () => mintTo(
+      send: () => splCall('finish: mint supply', (opts) => mintTo(
         connection,
         tempWallet,
         mint,
@@ -779,9 +816,9 @@ export async function finishTokenCreation({
         tempWallet.publicKey,
         totalTokens,
         [],
-        { commitment: 'finalized' },
+        opts,
         TOKEN_PROGRAM_ID,
-      ),
+      )),
     });
     status.supplyMinted = true;
     status.steps.push(r.skipped ? 'supply already minted (adopted)' : 'minted supply');
@@ -796,7 +833,7 @@ export async function finishTokenCreation({
         const info = await getMint(connection, mint, 'finalized', TOKEN_PROGRAM_ID);
         return info.mintAuthority === null;
       },
-      send: () => setAuthority(
+      send: () => splCall('finish: renounce mint authority', (opts) => setAuthority(
         connection,
         tempWallet,
         mint,
@@ -804,9 +841,9 @@ export async function finishTokenCreation({
         AuthorityType.MintTokens,
         null,
         [],
-        { commitment: 'finalized' },
+        opts,
         TOKEN_PROGRAM_ID,
-      ),
+      )),
     });
     status.mintAuthorityRenounced = true;
     status.steps.push(r.skipped ? 'mint authority already renounced (adopted)' : 'renounced mint authority');

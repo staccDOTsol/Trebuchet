@@ -424,8 +424,53 @@
     $('#tokMcap').value = b.dataset.mcap;
     renderImplied(); refreshEstimate();
   }));
-  $('#tokLogo').addEventListener('change', () => {
-    $('#logoLabel').textContent = $('#tokLogo').files[0]?.name || 'png / jpg / gif / webp';
+  // Logos are shrunk in the browser before upload: <=512px on the long
+  // side, PNG if that fits in ~95KB, otherwise JPEG at falling quality. The
+  // metadata upload is priced per byte and the server caps uploads.
+  const LOGO_MAX_PX = 512;
+  const LOGO_TARGET_BYTES = 95 * 1024;
+  let logoBlob = null;
+  async function prepareLogo(file) {
+    if (!file) return null;
+    if ((file.type === 'image/png' || file.type === 'image/jpeg') && file.size <= LOGO_TARGET_BYTES) return file;
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('That file is not an image the browser can read.'));
+        el.src = url;
+      });
+      const scale = Math.min(1, LOGO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      const toBlob = (type, q) => new Promise((resolve) => canvas.toBlob(resolve, type, q));
+      const png = await toBlob('image/png');
+      if (png && png.size <= LOGO_TARGET_BYTES) return new File([png], 'logo.png', { type: 'image/png' });
+      for (const q of [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]) {
+        const jpg = await toBlob('image/jpeg', q);
+        if (jpg && jpg.size <= LOGO_TARGET_BYTES) return new File([jpg], 'logo.jpg', { type: 'image/jpeg' });
+      }
+      const last = await toBlob('image/jpeg', 0.35);
+      return new File([last], 'logo.jpg', { type: 'image/jpeg' });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  $('#tokLogo').addEventListener('change', async () => {
+    const file = $('#tokLogo').files[0];
+    logoBlob = null;
+    if (!file) { $('#logoLabel').textContent = 'png / jpg / gif / webp'; return; }
+    $('#logoLabel').textContent = 'shrinking…';
+    try {
+      logoBlob = await prepareLogo(file);
+      $('#logoLabel').textContent = `${file.name} · ${Math.round(logoBlob.size / 1024)}KB`;
+    } catch (err) {
+      $('#tokLogo').value = '';
+      $('#logoLabel').textContent = describeError(err);
+    }
   });
 
   // ---------------------------------------------------------------------
@@ -683,8 +728,8 @@
     fd.append('symbol', $('#tokSymbol').value.trim());
     fd.append('description', $('#tokDesc').value.trim());
     fd.append('totalSupply', String(Math.floor(Number($('#tokSupply').value))));
-    const logo = $('#tokLogo').files[0];
-    if (logo) fd.append('logo', logo);
+    const logo = logoBlob || (await prepareLogo($('#tokLogo').files[0]));
+    if (logo) fd.append('logo', logo, logo.name || 'logo.png');
     const r = await api('/api/create-token', { body: fd });
     state.token = {
       mint: r.tokenMint, name: r.name, symbol: r.symbol, totalSupply: Number(r.totalSupply),

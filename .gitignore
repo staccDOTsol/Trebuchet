@@ -16,3 +16,4 @@ repo.zip
 
 _tutorial/
 test/e2e/videos/
+/apiSession.secret

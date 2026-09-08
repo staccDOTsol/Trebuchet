@@ -13,6 +13,7 @@
 //   resolvePublicDir           — resolves the public/ dir path through asar-unpacked when packaged
 
 import crypto from 'crypto';
+import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
 
@@ -55,8 +56,31 @@ export const CONTENT_SECURITY_POLICY = [
 // (or restart often) must pin it with TREBUCHET_API_SESSION_TOKEN, or a
 // browser that fetched the token from one process gets "invalid API
 // session" from the next. Fly: `fly secrets set TREBUCHET_API_SESSION_TOKEN=...`.
-export const API_SESSION_TOKEN = process.env.TREBUCHET_API_SESSION_TOKEN
-  || crypto.randomBytes(32).toString('base64url');
+//
+// Resolution order: TREBUCHET_API_SESSION_TOKEN env, then a secret file in
+// the config directory (created once, so the token survives restarts and
+// redeploys that keep the volume), then a fresh random token.
+function resolveApiSessionToken() {
+  if (process.env.TREBUCHET_API_SESSION_TOKEN) return process.env.TREBUCHET_API_SESSION_TOKEN;
+  const dir = process.env.TREBUCHET_CONFIG_DIR;
+  if (dir) {
+    const file = path.join(dir, 'apiSession.secret');
+    try {
+      const existing = fs.readFileSync(file, 'utf8').trim();
+      if (existing.length >= 32) return existing;
+    } catch (_) { /* first run */ }
+    const fresh = crypto.randomBytes(32).toString('base64url');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, fresh, { mode: 0o600 });
+      return fresh;
+    } catch (err) {
+      console.warn(`apiSession: could not persist token in ${dir}: ${err.message}`);
+    }
+  }
+  return crypto.randomBytes(32).toString('base64url');
+}
+export const API_SESSION_TOKEN = resolveApiSessionToken();
 
 // ---------------------------------------------------------------------------
 // Multer
@@ -65,7 +89,9 @@ export const API_SESSION_TOKEN = process.env.TREBUCHET_API_SESSION_TOKEN
 const storage = multer.memoryStorage();
 export const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 }, // 100KB Arweave free-tier limit
+  // The page downscales every logo to <=512px and ~<100KB before upload
+  // (Arweave is priced per byte); this cap is only the safety net.
+  limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype === 'image/png' || file.mimetype === 'image/jpeg') {
       cb(null, true);

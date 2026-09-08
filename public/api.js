@@ -43,14 +43,30 @@
   // can pass the session token as a query parameter instead.
   window.getApiSessionToken = getApiSessionToken;
 
-  window.fetch = async function (input, init) {
-    init = init || {};
-    if (!isLocalApiRequest(input)) return originalFetch(input, init);
-
+  // A 403 "invalid API session" means the server's token changed under us
+  // (restart, redeploy). Forget the cached token, fetch a fresh one, and
+  // retry once. Request bodies that are streams can't be replayed, but the
+  // app only sends JSON strings and FormData, which can.
+  async function withSession(input, init, retry) {
     const headers = new Headers(
       init.headers || (input instanceof Request ? input.headers : undefined),
     );
     headers.set('x-trebuchet-session', await getApiSessionToken());
-    return originalFetch(input, { ...init, headers: headers });
+    const res = await originalFetch(input, { ...init, headers: headers });
+    if (res.status === 403 && retry) {
+      let body = null;
+      try { body = await res.clone().json(); } catch (_) { /* not JSON */ }
+      if (body && /invalid api session/i.test(String(body.error || ''))) {
+        apiSessionTokenPromise = null;
+        return withSession(input, init, false);
+      }
+    }
+    return res;
+  }
+
+  window.fetch = async function (input, init) {
+    init = init || {};
+    if (!isLocalApiRequest(input)) return originalFetch(input, init);
+    return withSession(input, init, true);
   };
 })();

@@ -1154,7 +1154,10 @@ app.get('/api/rpc-health', async (_req, res) => {
 function uploadLogo(req, res, next) {
   upload.single('logo')(req, res, (err) => {
     if (err) {
-      return res.status(400).json({ success: false, error: err.message });
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Logo is over 2MB after compression — pick a smaller image.'
+        : err.message;
+      return res.status(400).json({ success: false, error: message });
     }
     if (req.file) {
       try {

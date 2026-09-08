@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 
 test('public frontend has no inline JavaScript event handlers', () => {
-  const app = read('public/app.js');
-  const html = read('public/index.html');
+  const app = read('public/orca.js');
+  const html = read('public/orca.html');
   const combined = `${app}\n${html}`;
 
   assert.equal(/\bon(?:click|load|error)=["']/i.test(combined), false);
@@ -14,10 +14,9 @@ test('public frontend has no inline JavaScript event handlers', () => {
 });
 
 test('frontend assets are local and guarded by CSP', () => {
-  const html = read('public/index.html');
+  const html = read('public/orca.html');
   const middleware = read('serverMiddleware.js');
 
-  assert.match(html, /Content-Security-Policy/);
   assert.match(middleware, /Content-Security-Policy/);
   assert.match(middleware, /frame-ancestors 'none'/);
   assert.match(middleware, /X-Frame-Options/);

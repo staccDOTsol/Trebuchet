@@ -56,6 +56,20 @@ export function registerOrcaRoutes(app, deps) {
     pendingWallets,
   } = deps;
 
+  // A wallet whose key arrived inline (pasted into the page because this
+  // server never had it, or lost it) goes into the recovery list so the rest
+  // of the launch can resolve it by public key and a crash is recoverable.
+  function rememberInlineSigner(signer) {
+    if (signer.source !== 'body') return;
+    try {
+      if (!pendingWallets.get(signer.walletPublicKey)) {
+        pendingWallets.add(signer.walletPublicKey, signer.secretKeyArr, null);
+      }
+    } catch (err) {
+      console.warn(`orca: could not store inline signer in the recovery list: ${err.message}`);
+    }
+  }
+
   // ---- read-only -----------------------------------------------------------
 
   app.get('/api/orca/meta', async (req, res) => {
@@ -162,6 +176,7 @@ export function registerOrcaRoutes(app, deps) {
       }
       const signer = resolveSigner({ tempWalletSecretKey, walletPublicKey: req.body.walletPublicKey });
       walletPublicKey = signer.walletPublicKey;
+      rememberInlineSigner(signer);
       if (rejectOrClaimLaunchOp(res, walletPublicKey, 'orca-launch')) {
         walletPublicKey = null;
         return;
@@ -256,6 +271,7 @@ export function registerOrcaRoutes(app, deps) {
       }
       const signer = resolveSigner({ tempWalletSecretKey, walletPublicKey: req.body.walletPublicKey });
       walletPublicKey = signer.walletPublicKey;
+      rememberInlineSigner(signer);
       if (walletPublicKey === destinationWallet) throw badRequest('destination must differ from the launch wallet');
       if (rejectOrClaimLaunchOp(res, walletPublicKey, 'orca-finish')) {
         walletPublicKey = null;

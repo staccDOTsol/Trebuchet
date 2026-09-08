@@ -243,29 +243,31 @@ export async function describeAllQuotes() {
 // Tx helpers
 // ---------------------------------------------------------------------------
 
-// Load-balanced RPC pools can simulate a transaction on a node that hasn't
-// seen the blockhash yet; web3.js reports that as "Simulation failed" with
-// an EMPTY log list (a real program error always carries logs). Resend once
-// without preflight in that case — the cluster validates for real.
-function isLoglessSimulationFailure(err) {
-  const logs = err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null;
-  return /simulation failed/i.test(String(err && err.message || '')) && (!logs || logs.length === 0);
-}
-
+// Every send is retried instead of failing a launch over RPC weather. A
+// preflight simulation failure is resent without preflight (load-balanced
+// pools simulate on nodes that lag the cluster); transient errors get a
+// fresh blockhash; insufficient funds and confirmed on-chain failures stop.
 async function execute(ctx, builder, { label, alreadyDone = null, onRetry = null }) {
+  let skipPreflight = false;
   const res = await landTxWithRetry({
     label,
     alreadyDone,
-    onRetry,
-    maxAttempts: 3,
-    settleMs: 2000,
+    maxAttempts: 5,
+    settleMs: 2500,
+    onRetry: async (attempt, err) => {
+      if (/simulation failed|blockhash not found/i.test(String(err && err.message || ''))) skipPreflight = true;
+      if (onRetry) await onRetry(attempt, err);
+    },
     send: async () => {
       try {
-        return await builder.buildAndExecute(undefined, { skipPreflight: false }, 'confirmed');
+        return await builder.buildAndExecute(undefined, { skipPreflight, maxRetries: 5 }, 'confirmed');
       } catch (err) {
-        if (!isLoglessSimulationFailure(err)) throw err;
-        console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
-        return builder.buildAndExecute(undefined, { skipPreflight: true, maxRetries: 5 }, 'confirmed');
+        if (!skipPreflight && /simulation failed/i.test(String(err && err.message || ''))) {
+          console.warn(`${label}: preflight simulation failed — resending without preflight`);
+          skipPreflight = true;
+          return builder.buildAndExecute(undefined, { skipPreflight: true, maxRetries: 5 }, 'confirmed');
+        }
+        throw err;
       }
     },
   });

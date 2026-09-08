@@ -333,7 +333,11 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
       <div id="walletEmpty">
         <button id="btnGenWallet" class="btn grad" style="width:100%;min-height:52px;border-radius:14px;font-size:16px;box-shadow:0 10px 30px -12px rgba(255,160,80,.6)"><i class="fas fa-wallet" style="margin-right:8px"></i>Generate launch wallet</button>
         <div class="or"><span></span>or resume<span></span></div>
-        <div class="sendrow"><input id="existingWallet" class="in mono" placeholder="saved launch wallet (public key)"><button id="btnUseWallet" class="btn">Use</button></div>
+        <div class="wcol">
+          <input id="existingWallet" class="in mono" placeholder="launch wallet public key (if this server still holds its key)">
+          <input id="existingSecret" class="in mono" type="password" autocomplete="off" placeholder="…or paste its secret key (base58 or JSON array)">
+          <button id="btnUseWallet" class="btn">Use this wallet</button>
+        </div>
       </div>
       <div id="walletInfo" class="hidden">
         <div class="wgrid">
@@ -345,7 +349,11 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
               <div class="msg warn" style="margin-top:8px;padding:8px 10px;font-size:12.5px">Save this now. It's also on this machine's recovery list, but the key is the only way to rescue funds if something dies mid-launch.</div>
               <div class="addr" style="margin-top:8px"><span class="t dim" id="walletSecret">••••••••••••••••••••••••••••••••</span><button class="ib" id="btnRevealSecret" title="reveal"><i class="far fa-eye"></i></button><button class="ib" data-copy="#walletSecret" title="copy"><i class="far fa-copy"></i></button></div>
             </div>
-            <div id="noSecret" class="note mono hidden">secret stored on this machine (recovery list) — not shown again</div>
+            <div id="noSecret" class="note mono hidden">secret held by the server (recovery list) — not shown again</div>
+            <div id="needSecret" class="hidden">
+              <div class="msg bad" style="margin-top:0">This server does not hold this wallet's key. Paste the secret key to sign with it.</div>
+              <div class="sendrow" style="margin-top:8px"><input id="lateSecret" class="in mono" type="password" autocomplete="off" placeholder="secret key (base58 or JSON array)"><button id="btnLateSecret" class="btn">Use</button></div>
+            </div>
             <label class="chk" id="savedSecret"><span class="box"><i class="fas fa-check"></i></span>I saved the secret key</label>
           </div>
           <div class="qr"><img id="walletQr" alt="wallet QR"></div>

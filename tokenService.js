@@ -39,7 +39,7 @@ import {
   createTokenMetadataUmi,
   uploadTokenMetadata,
 } from './metadataUploadService.js';
-import { landTxWithRetry } from './chainRetry.js';
+import { landTxWithRetry, classifyChainError } from './chainRetry.js';
 
 // The RPC URL is sourced from rpcConfig.js, which seeds itself with a
 // public-mainnet default on first run and persists user-selected RPCs to
@@ -58,39 +58,71 @@ function makeConnection() {
 // RPC retry helper — public RPCs often return stale data after a tx confirms.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// Preflight-lag guard
+// Send-with-retry for token creation
 // ---------------------------------------------------------------------------
 //
-// Load-balanced RPC pools (Triton, Helius, ...) can hand out a blockhash from
-// one node and simulate the transaction on another that hasn't seen it yet.
-// web3.js surfaces that as "Simulation failed" with an EMPTY log list. A real
-// program failure always carries logs. So: on a log-less simulation failure,
-// resend once without preflight — the cluster validates it for real, and a
-// genuinely bad transaction still fails (with on-chain logs) at confirm time.
+// Load-balanced RPC pools (Triton, Helius, ...) hand out a blockhash from one
+// node and simulate on another that may not have caught up: preflight then
+// fails with an empty log list, or with a program error that only makes sense
+// on stale state ("Mint needs to be signer" right after the mint landed).
+// Rather than fail a launch over RPC weather, every send here is retried:
+//
+//   - a preflight/simulation failure is resent WITHOUT preflight (the cluster
+//     validates it for real; a genuinely bad transaction still fails at
+//     confirm time, with on-chain logs, and that is final);
+//   - a transient failure (blockhash expired, timeout, 429, socket) is resent
+//     with a fresh blockhash after a short pause;
+//   - insufficient funds or a confirmed on-chain failure stops immediately.
 const FINALIZED_OPTS = Object.freeze({ commitment: 'finalized' });
-function isLoglessSimulationFailure(err) {
-  const logs = err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null;
-  return /simulation failed/i.test(String(err && err.message || '')) && (!logs || logs.length === 0);
+const SEND_ATTEMPTS = 5;
+function isSimulationFailure(err) {
+  return /simulation failed|blockhash not found/i.test(String(err && err.message || ''));
 }
-async function splCall(label, run) {
-  try {
-    return await run(FINALIZED_OPTS);
-  } catch (err) {
-    if (!isLoglessSimulationFailure(err)) throw err;
-    console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
-    return run({ ...FINALIZED_OPTS, skipPreflight: true, maxRetries: 5 });
+async function retrySend(label, run) {
+  let skipPreflight = false;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+    try {
+      return await run(skipPreflight);
+    } catch (err) {
+      lastErr = err;
+      const kind = classifyChainError(err);
+      const sim = isSimulationFailure(err);
+      if (kind === 'insufficient_funds' || (kind === 'deterministic' && !sim)) throw err;
+      if (attempt >= SEND_ATTEMPTS) break;
+      if (sim) skipPreflight = true;
+      const wait = 1500 * attempt;
+      console.warn(`${label}: attempt ${attempt}/${SEND_ATTEMPTS} failed (${sim ? 'preflight simulation' : kind}): ${err.message}. Retrying in ${wait}ms${skipPreflight ? ' without preflight' : ''}.`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
+  throw lastErr;
 }
-async function umiCall(label, run) {
-  try {
-    return await run(false);
-  } catch (err) {
-    const msg = String(err && err.message || '');
-    const logs = err && Array.isArray(err.logs) ? err.logs : (err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null);
-    if (!/simulation failed|blockhash not found/i.test(msg) || (logs && logs.length > 0)) throw err;
-    console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
-    return run(true);
+// SPL-token helpers take a ConfirmOptions object.
+function splCall(label, run) {
+  return retrySend(label, (skipPreflight) => run(skipPreflight
+    ? { ...FINALIZED_OPTS, skipPreflight: true, maxRetries: 5 }
+    : FINALIZED_OPTS));
+}
+// Umi builders take { send: { skipPreflight } }.
+function umiCall(label, run) {
+  return retrySend(label, run);
+}
+
+// Block until the RPC pool serves the mint at 'finalized'. Metaplex's
+// createV1 looks the mint up before building the instruction; on a lagging
+// node it would try to create the mint itself and fail.
+async function waitForMintVisible(connection, mint, { attempts = 30, delayMs = 1500 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await getMint(connection, mint, 'finalized', TOKEN_PROGRAM_ID);
+      return true;
+    } catch (_) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
+  console.warn(`mint ${mint.toString()} still not visible at finalized after ${attempts} polls; continuing`);
+  return false;
 }
 
 async function withRpcRetry(fn, { maxRetries = 5, baseDelayMs = 1000 } = {}) {
@@ -360,6 +392,7 @@ export async function createTokenWithMetaplex({
     
     // Convert the mint public key to Umi format
     const mintPubkey = umiPublicKey(mint.toString());
+    await waitForMintVisible(connection, mint);
     
     // Create metadata for the existing token
     await umiCall('create metadata', (skipPreflight) => createV1(umi, {
@@ -464,16 +497,13 @@ export async function createTokenWithMetaplex({
       // Try a simpler approach first - just change the update authority
       console.log('Setting update authority to System Program to revoke it...');
       
-      await updateV1(umi, {
+      await umiCall('update metadata', (skipPreflight) => updateV1(umi, {
         mint: mintPubkey,
         authority: umi.identity,
         // Set update authority to System Program (11111111111111111111111111111111)
         // This effectively revokes the update authority permanently
         newUpdateAuthority: some(systemProgramAddress),
-      }).sendAndConfirm(umi, {
-        send: { commitment: 'finalized' },
-        confirm: { commitment: 'finalized' }
-      });
+      }).sendAndConfirm(umi, { send: { commitment: 'finalized', skipPreflight }, confirm: { commitment: 'finalized' } }));
       
       console.log('Update authority successfully revoked (set to System Program)!');
       metadataUpdateSuccess = true;
@@ -486,11 +516,11 @@ export async function createTokenWithMetaplex({
       // This might fail since we no longer have authority, but that's OK
       try {
         console.log('Attempting to make metadata immutable...');
-        await updateV1(umi, {
+        await umiCall('update metadata', (skipPreflight) => updateV1(umi, {
           mint: mintPubkey,
           authority: systemProgramAddress, // Use system program as authority
           isMutable: some(false),
-        }).sendAndConfirm(umi);
+        }).sendAndConfirm(umi, { send: { skipPreflight } }));
         console.log('Metadata made immutable');
         metadataImmutableSuccess = true;
         progress({ stage: 'metadata_made_immutable', tokenMint: mint.toString() });
@@ -513,7 +543,7 @@ export async function createTokenWithMetaplex({
       try {
         const systemProgramAddress = umiPublicKey('11111111111111111111111111111111');
         
-        await updateV1(umi, {
+        await umiCall('update metadata', (skipPreflight) => updateV1(umi, {
           mint: mintPubkey,
           authority: umi.identity,
           data: some({
@@ -528,10 +558,7 @@ export async function createTokenWithMetaplex({
           newUpdateAuthority: some(systemProgramAddress),
           primarySaleHappened: none(),
           isMutable: some(false),
-        }).sendAndConfirm(umi, {
-          send: { commitment: 'finalized' },
-          confirm: { commitment: 'finalized' }
-        });
+        }).sendAndConfirm(umi, { send: { commitment: 'finalized', skipPreflight }, confirm: { commitment: 'finalized' } }));
         
         console.log('Update authority revoked and metadata made immutable!');
         metadataUpdateSuccess = true;
@@ -555,14 +582,11 @@ export async function createTokenWithMetaplex({
           const systemProgramAddress = umiPublicKey('11111111111111111111111111111111');
           
           // Step 1: Just change update authority, nothing else
-          const updateAuthResult = await updateV1(umi, {
+          const updateAuthResult = await umiCall('update metadata', (skipPreflight) => updateV1(umi, {
             mint: mintPubkey,
             authority: umi.identity,
             newUpdateAuthority: some(systemProgramAddress),
-          }).sendAndConfirm(umi, { 
-            send: { commitment: 'finalized' },
-            confirm: { commitment: 'finalized' }
-          });
+          }).sendAndConfirm(umi, { send: { commitment: 'finalized', skipPreflight }, confirm: { commitment: 'finalized' } }));
           
           console.log('Successfully revoked update authority in final attempt!');
           console.log('Transaction signature:', updateAuthResult.signature);
@@ -773,7 +797,7 @@ export async function finishTokenCreation({
         const a = await connection.getAccountInfo(metadataPda, 'finalized');
         return !!(a && a.data && a.data.length > 0);
       },
-      send: () => createV1(umi, {
+      send: () => umiCall('create metadata', (skipPreflight) => createV1(umi, {
         mint: mintPubkey,
         authority: umi.identity,
         name,
@@ -782,7 +806,7 @@ export async function finishTokenCreation({
         sellerFeeBasisPoints: percentAmount(0),
         decimals: 9,
         tokenStandard: TokenStandard.Fungible,
-      }).sendAndConfirm(umi),
+      }).sendAndConfirm(umi, { send: { skipPreflight } })),
     });
     status.metadataExists = true;
     status.steps.push('created metadata account');
@@ -863,11 +887,11 @@ export async function finishTokenCreation({
           if (!a || !a.data || a.data.length < 33) return false;
           try { return new PublicKey(a.data.subarray(1, 33)).toBase58() === SYSTEM_PROGRAM_ADDRESS; } catch (_) { return false; }
         },
-        send: () => updateV1(umi, {
+        send: () => umiCall('update metadata', (skipPreflight) => updateV1(umi, {
           mint: mintPubkey,
           authority: umi.identity,
           newUpdateAuthority: some(systemProgramAddress),
-        }).sendAndConfirm(umi, { send: { commitment: 'finalized' }, confirm: { commitment: 'finalized' } }),
+        }).sendAndConfirm(umi, { send: { commitment: 'finalized', skipPreflight }, confirm: { commitment: 'finalized' } })),
       });
       status.updateAuthorityRevoked = true;
       status.steps.push('revoked metadata update authority');

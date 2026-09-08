@@ -63,6 +63,7 @@ const INSUFFICIENT_FUNDS_SIGNS = [
 // Things that are worth another attempt: the transaction didn't land (or we
 // can't tell), and the cause is cluster/RPC weather rather than our request.
 const TRANSIENT_SIGNS = [
+  /simulation failed/i, // preflight ran on a lagging RPC node; senders resend without preflight
   /blockhash not found/i,
   /block height exceeded/i,
   /TransactionExpiredBlockheightExceededError/i,

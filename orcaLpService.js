@@ -243,6 +243,15 @@ export async function describeAllQuotes() {
 // Tx helpers
 // ---------------------------------------------------------------------------
 
+// Load-balanced RPC pools can simulate a transaction on a node that hasn't
+// seen the blockhash yet; web3.js reports that as "Simulation failed" with
+// an EMPTY log list (a real program error always carries logs). Resend once
+// without preflight in that case — the cluster validates for real.
+function isLoglessSimulationFailure(err) {
+  const logs = err && Array.isArray(err.transactionLogs) ? err.transactionLogs : null;
+  return /simulation failed/i.test(String(err && err.message || '')) && (!logs || logs.length === 0);
+}
+
 async function execute(ctx, builder, { label, alreadyDone = null, onRetry = null }) {
   const res = await landTxWithRetry({
     label,
@@ -250,7 +259,15 @@ async function execute(ctx, builder, { label, alreadyDone = null, onRetry = null
     onRetry,
     maxAttempts: 3,
     settleMs: 2000,
-    send: () => builder.buildAndExecute(undefined, { skipPreflight: false }, 'confirmed'),
+    send: async () => {
+      try {
+        return await builder.buildAndExecute(undefined, { skipPreflight: false }, 'confirmed');
+      } catch (err) {
+        if (!isLoglessSimulationFailure(err)) throw err;
+        console.warn(`${label}: preflight simulation failed with no logs (RPC node lag) — resending without preflight`);
+        return builder.buildAndExecute(undefined, { skipPreflight: true, maxRetries: 5 }, 'confirmed');
+      }
+    },
   });
   return res.skipped ? null : res.value;
 }

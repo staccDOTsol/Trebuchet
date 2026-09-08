@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
-const serverSrc = readFileSync(path.join(REPO, 'server.js'), 'utf8');
+const serverSrc = readFileSync(path.join(REPO, 'server.js'), 'utf8')
+  + '\n' + readFileSync(path.join(REPO, 'orcaRoutes.js'), 'utf8');
 
 // ---------------------------------------------------------------------------
 // Per-wallet launch-operation mutex regression tests.
@@ -68,9 +69,8 @@ test('mutex infrastructure exists', () => {
 // duplicate never frees the running op's lock.
 for (const [route, op] of [
   ['/api/create-token', 'create-token'],
-  ['/api/create-lp', 'create-lp'],
-  ['/api/resume-launch', 'resume-launch'],
-  ['/api/transfer-assets', 'transfer-assets'],
+  ['/api/orca/launch', 'orca-launch'],
+  ['/api/orca/finish', 'orca-finish'],
 ]) {
   test(`${route} claims and releases the per-wallet mutex`, () => {
     const src = handlerSource(route);
@@ -93,35 +93,11 @@ for (const [route, op] of [
   });
 }
 
-// The acquire endpoint is different: the job runs in the background after
-// the HTTP response returns, so the lock must outlive the handler and be
-// released when the job finishes (success or failure).
-test('/api/acquire-quote-tokens claims for the job lifetime and releases via onFinished', () => {
-  const src = handlerSource('/api/acquire-quote-tokens');
-  assert.ok(
-    src.includes("rejectOrClaimLaunchOp(res, acquireWalletPk, 'acquire-quote-tokens')"),
-    'acquire endpoint must guard before starting the job',
-  );
-  assert.ok(
-    /onFinished:\s*\(\)\s*=>\s*clearLaunchOpInFlight\(acquireWalletPk\)/.test(src),
-    'acquire endpoint must release the lock when the job finishes',
-  );
-  // startAcquireJob must actually invoke onFinished on completion paths.
-  assert.ok(
-    /function startAcquireJob\(\{ ownerKeypair, autoSwapPlan, onFinished = null \}\)/.test(serverSrc),
-    'startAcquireJob must accept onFinished',
-  );
-  assert.ok(
-    /\.finally\(\(\) => \{[\s\S]{0,400}?onFinished\(\)/.test(serverSrc),
-    'startAcquireJob must call onFinished in a .finally so both success and failure release the lock',
-  );
-});
-
 // The 409 rejection path must NOT claim/release: a rejected duplicate that
-// nulls walletPublicKey before returning (create-lp / resume) guarantees
+// nulls walletPublicKey before returning (orca launch / finish) guarantees
 // the finally can't tear down the running op's progress tracker either.
-test('create-lp and resume-launch null walletPublicKey on rejection to protect the running op', () => {
-  for (const route of ['/api/create-lp', '/api/resume-launch']) {
+test('orca launch and finish null walletPublicKey on rejection to protect the running op', () => {
+  for (const route of ['/api/orca/launch', '/api/orca/finish']) {
     const src = handlerSource(route);
     const guardIdx = src.indexOf('rejectOrClaimLaunchOp(');
     const slice = src.slice(guardIdx, guardIdx + 400);
@@ -132,20 +108,10 @@ test('create-lp and resume-launch null walletPublicKey on rejection to protect t
   }
 });
 
-// Frontend contract: the modules that call these endpoints must recognize
-// OP_IN_FLIGHT and avoid rendering it as a launch failure.
-test('frontend modules handle 409 OP_IN_FLIGHT', () => {
-  const modules = [
-    'public/modules/lp-execution.js',
-    'public/modules/transfer.js',
-    'public/modules/cancel-flow.js',
-    'public/modules/funding.js',
-  ];
-  for (const rel of modules) {
-    const src = readFileSync(path.join(REPO, rel), 'utf8');
-    assert.ok(
-      /OP_IN_FLIGHT/.test(src),
-      `${rel} must check for the OP_IN_FLIGHT code`,
-    );
-  }
+// Frontend contract: the page that calls these endpoints must recognize
+// the OP_IN_FLIGHT code and explain it instead of showing a raw error.
+test('frontend handles 409 OP_IN_FLIGHT', () => {
+  const src = readFileSync(path.join(REPO, 'public/orca.js'), 'utf8');
+  assert.ok(src.includes("'OP_IN_FLIGHT'"), 'public/orca.js must key on OP_IN_FLIGHT');
+  assert.ok(/runningForSec/.test(src), 'public/orca.js must surface how long the running op has been going');
 });

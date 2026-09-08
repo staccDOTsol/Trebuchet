@@ -1,0 +1,15 @@
+node_modules
+dist
+out
+release
+.git
+.cache
+docs/screenshots
+test/e2e/videos
+*.blockmap
+rpcConfig.json
+launchJournals.json
+pendingWallets.json
+userPrefs.json
+files.zip
+repo.zip

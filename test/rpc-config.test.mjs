@@ -22,13 +22,10 @@ test('seeds default RPC config in the configured directory', async (t) => {
   const rpcConfig = await importFreshRpcConfig(configDir);
 
   const config = rpcConfig.getConfig();
-  assert.equal(config.active, 'https://api.mainnet-beta.solana.com');
-  assert.deepEqual(config.saved, [
-    {
-      name: 'Public mainnet',
-      url: 'https://api.mainnet-beta.solana.com',
-    },
-  ]);
+  assert.deepEqual(config.saved, rpcConfig.DEFAULT_SAVED_RPCS);
+  assert.equal(config.active, rpcConfig.DEFAULT_SAVED_RPCS[0].url);
+  // Public mainnet stays available as the last-resort fallback.
+  assert.ok(config.saved.some((r) => r.url === 'https://api.mainnet-beta.solana.com'));
 
   const saved = JSON.parse(readFileSync(path.join(configDir, 'rpcConfig.json'), 'utf8'));
   assert.equal(saved.active, config.active);
@@ -42,20 +39,24 @@ test('adds, updates, selects, and removes saved RPC endpoints', async (t) => {
   rpcConfig.addSavedRpc('Helius', heliusUrl);
   rpcConfig.setActiveRpc(heliusUrl);
 
+  const defaults = rpcConfig.DEFAULT_SAVED_RPCS;
   assert.equal(rpcConfig.getRpcUrl(), heliusUrl);
-  assert.equal(rpcConfig.getConfig().saved.length, 2);
+  assert.equal(rpcConfig.getConfig().saved.length, defaults.length + 1);
 
   rpcConfig.addSavedRpc('Helius renamed', heliusUrl);
-  assert.equal(rpcConfig.getConfig().saved.length, 2);
+  assert.equal(rpcConfig.getConfig().saved.length, defaults.length + 1);
   assert.equal(
     rpcConfig.getConfig().saved.find((entry) => entry.url === heliusUrl).name,
     'Helius renamed',
   );
 
   rpcConfig.removeSavedRpc(heliusUrl);
-  assert.equal(rpcConfig.getRpcUrl(), 'https://api.mainnet-beta.solana.com');
+  assert.equal(rpcConfig.getRpcUrl(), defaults[0].url);
+  // Strip the seeded list down to one entry; the last one can't be removed.
+  for (const entry of defaults.slice(1)) rpcConfig.removeSavedRpc(entry.url);
+  assert.equal(rpcConfig.getConfig().saved.length, 1);
   assert.throws(
-    () => rpcConfig.removeSavedRpc('https://api.mainnet-beta.solana.com'),
+    () => rpcConfig.removeSavedRpc(defaults[0].url),
     /Cannot remove the last saved RPC/,
   );
 });

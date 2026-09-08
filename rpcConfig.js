@@ -28,14 +28,35 @@ const __dirname = path.dirname(__filename);
 const CONFIG_DIR = process.env.TREBUCHET_CONFIG_DIR || __dirname;
 const CONFIG_FILE = path.join(CONFIG_DIR, 'rpcConfig.json');
 
-// First-run default. Public mainnet works out of the box; users
-// should add their own dedicated endpoint (Helius / QuickNode /
-// Triton / Alchemy — free tier is plenty) via the in-app RPC
-// settings before attempting a real launch.
-const DEFAULT_RPC = {
+// First-run defaults. Everything talks to the RPC server-side (the browser
+// never sees these URLs; CSP pins connect-src to the app origin).
+//
+//   Triton One — archival node: getProgramAccounts scans for the Orca
+//                config / fee tiers / explore feed and full signature
+//                history. Active by default.
+//   FluxRPC    — fast non-archival fallback.
+//   Public     — last resort; rate-limits getProgramAccounts.
+//
+// Override the active endpoint with TREBUCHET_RPC_URL, or switch in the
+// in-app RPC settings.
+const TRITON_RPC = {
+  name: 'Triton One (archival)',
+  url: 'https://jarrett-solana-7ba9.mainnet.rpcpool.com/6dee9145-f5c7-466c-854e-edd7464c5ea8',
+};
+const FLUX_RPC = {
+  name: 'FluxRPC (eu)',
+  url: 'https://eu.fluxrpc.com?key=ab9278e1-6430-41ab-aee0-ac6b759a1fe4',
+};
+const PUBLIC_RPC = {
   name: 'Public mainnet',
   url: 'https://api.mainnet-beta.solana.com',
 };
+const DEFAULT_RPC = process.env.TREBUCHET_RPC_URL
+  ? { name: 'TREBUCHET_RPC_URL', url: process.env.TREBUCHET_RPC_URL }
+  : TRITON_RPC;
+export const DEFAULT_SAVED_RPCS = process.env.TREBUCHET_RPC_URL
+  ? [DEFAULT_RPC, TRITON_RPC, FLUX_RPC, PUBLIC_RPC]
+  : [TRITON_RPC, FLUX_RPC, PUBLIC_RPC];
 
 // In-memory state, lazily loaded
 let state = null;
@@ -63,7 +84,7 @@ function load() {
   // can add their own endpoints through the in-app RPC settings UI
   // (addSavedRpc) and switch the active one (setActiveRpc). All changes
   // are persisted to CONFIG_FILE and survive restarts.
-  state = { active: DEFAULT_RPC.url, saved: [DEFAULT_RPC] };
+  state = { active: DEFAULT_RPC.url, saved: DEFAULT_SAVED_RPCS.map((r) => ({ ...r })) };
   persist();
 }
 

@@ -20,7 +20,18 @@ import path from 'path';
 // Constants
 // ---------------------------------------------------------------------------
 
-export const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost']);
+// Local dev hosts, the public FireFun domain, and anything listed in
+// TREBUCHET_ALLOWED_HOSTS (comma-separated; e.g. the Fly.io app hostname).
+export const ALLOWED_HOSTS = new Set([
+  '127.0.0.1',
+  'localhost',
+  'firefun.xyz',
+  'www.firefun.xyz',
+  ...String(process.env.TREBUCHET_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+]);
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",

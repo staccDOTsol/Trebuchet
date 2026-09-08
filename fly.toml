@@ -1,0 +1,29 @@
+# Fly.io config for firefun.xyz. See Dockerfile for the one-time setup.
+app = "firefun"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "3000"
+  TREBUCHET_CONFIG_DIR = "/data"
+  # Fly hostname(s) allowed through the Host-header check, on top of
+  # firefun.xyz / www.firefun.xyz which are always allowed.
+  TREBUCHET_ALLOWED_HOSTS = "firefun.fly.dev"
+
+[[mounts]]
+  source = "firefun_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false   # launches run for minutes; never stop mid-launch
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

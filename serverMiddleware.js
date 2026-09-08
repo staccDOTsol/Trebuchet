@@ -48,9 +48,15 @@ export const CONTENT_SECURITY_POLICY = [
 ].join('; ');
 
 // Generated once at module load, never rotates. Valid for the process
-// lifetime. The threat model assumes localhost binding + no CORS,
-// so cross-origin pages cannot exfiltrate the token from /api/session.
-export const API_SESSION_TOKEN = crypto.randomBytes(32).toString('base64url');
+// lifetime. The threat model assumes same-origin only + no CORS, so
+// cross-origin pages cannot exfiltrate the token from /api/session.
+//
+// Hosted deployments that run more than one process behind one hostname
+// (or restart often) must pin it with TREBUCHET_API_SESSION_TOKEN, or a
+// browser that fetched the token from one process gets "invalid API
+// session" from the next. Fly: `fly secrets set TREBUCHET_API_SESSION_TOKEN=...`.
+export const API_SESSION_TOKEN = process.env.TREBUCHET_API_SESSION_TOKEN
+  || crypto.randomBytes(32).toString('base64url');
 
 // ---------------------------------------------------------------------------
 // Multer

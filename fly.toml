@@ -17,6 +17,10 @@ primary_region = "iad"
   source = "firefun_data"
   destination = "/data"
 
+# ONE machine only. State lives on the volume and the API session token is
+# per-process; a second machine breaks both. After `fly launch` run:
+#   fly scale count 1
+#   fly secrets set TREBUCHET_API_SESSION_TOKEN=$(openssl rand -base64 32)
 [http_service]
   internal_port = 3000
   force_https = true

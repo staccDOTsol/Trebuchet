@@ -64,8 +64,8 @@ export const FORCED_MIN_SUPPLY_PCT = 1;
 export const FORCED_QUOTES = Object.freeze([
   Object.freeze({
     mint: 'EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump',
-    symbol: 'EVUL',
-    name: 'EVUL',
+    symbol: 'TOKEN',
+    name: '$TOKEN',
     decimals: 6,
     programId: TOKEN_2022_PROGRAM,
     forced: true,
@@ -73,8 +73,8 @@ export const FORCED_QUOTES = Object.freeze([
   }),
   Object.freeze({
     mint: '6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f',
-    symbol: 'infity',
-    name: 'Infinity Liquidity',
+    symbol: 'INFITY',
+    name: '$INFITY (formerly stacsol)',
     decimals: 9,
     programId: TOKEN_2022_PROGRAM,
     transferFeeBps: 690,

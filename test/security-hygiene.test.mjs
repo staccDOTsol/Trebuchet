@@ -20,8 +20,8 @@ test('frontend assets are local and guarded by CSP', () => {
   assert.match(middleware, /Content-Security-Policy/);
   assert.match(middleware, /frame-ancestors 'none'/);
   assert.match(middleware, /X-Frame-Options/);
-  assert.match(html, /vendor\/bulma\/bulma\.min\.css/);
   assert.match(html, /vendor\/fontawesome\/css\/all\.min\.css/);
+  assert.doesNotMatch(html, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
   assert.doesNotMatch(html, /cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com/);
 });
 

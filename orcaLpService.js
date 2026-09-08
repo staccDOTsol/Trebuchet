@@ -72,7 +72,9 @@ import {
   classifyPoolSides,
   estimateOrcaLaunchSol,
   ORCA_MAX_PROTOCOL_FEE_RATE,
+  jupiterSwapUrl,
 } from './orcaLpPlan.js';
+import { WSOL_MINT } from './lpConstants.js';
 
 Decimal.set({ precision: 60, toExpNeg: -40, toExpPos: 40 });
 
@@ -207,7 +209,23 @@ export async function getConfigInfo(whirlpoolsConfig = DEFAULT_WHIRLPOOLS_CONFIG
 // Quote token descriptions (symbol, decimals, program, USD price)
 // ---------------------------------------------------------------------------
 
+// Quote descriptions. `describeQuoteBasic` is what discovery uses (no pool
+// lookup, so no recursion); `describeQuote` adds a price fallback from our
+// own pools for tokens the aggregators have not indexed yet (a freshly
+// launched token used as a quote, e.g. $FIREFUN).
 export async function describeQuote(mint) {
+  const info = await describeQuoteBasic(mint);
+  if (info.priceUsd) return info;
+  try {
+    const launch = await getLaunch(mint, { sinceUnix: 0 });
+    if (launch?.priceUsd) return { ...info, priceUsd: launch.priceUsd, priceSource: 'firefun-pools' };
+  } catch (err) {
+    console.warn(`orca: pool price fallback failed for ${mint}: ${err.message}`);
+  }
+  return info;
+}
+
+async function describeQuoteBasic(mint) {
   const known = [...FORCED_QUOTES, ...OPTIONAL_QUOTES].find((q) => q.mint === mint) || null;
   let info = null;
   try { info = await getTokenInfo(mint); } catch (err) {
@@ -815,15 +833,51 @@ export async function discoverLaunches({
       });
     }
 
+    // Which side of a pool is the launched token?
+    //   1. A launch locks several pools from ONE wallet within minutes; the
+    //      mint common to that wallet's pools is the launched token. This is
+    //      exact for anything this app launched and needs no price data.
+    //   2. Otherwise the mint that is NOT a known quote.
+    //   3. Otherwise a single-sided position sitting above the current tick
+    //      holds token A, below it holds token B.
+    const ownerMintCounts = new Map(); // owner -> Map(mint -> count)
+    for (const [poolId, locks] of locksByPool.entries()) {
+      const pool = pools.get(poolId);
+      for (const owner of new Set(locks.map((l) => l.positionOwner))) {
+        if (!ownerMintCounts.has(owner)) ownerMintCounts.set(owner, new Map());
+        const m = ownerMintCounts.get(owner);
+        m.set(pool.tokenMintA, (m.get(pool.tokenMintA) || 0) + 1);
+        m.set(pool.tokenMintB, (m.get(pool.tokenMintB) || 0) + 1);
+      }
+    }
+    function classify(pool, locks) {
+      for (const owner of new Set(locks.map((l) => l.positionOwner))) {
+        const m = ownerMintCounts.get(owner);
+        const a = m.get(pool.tokenMintA) || 0;
+        const b = m.get(pool.tokenMintB) || 0;
+        if (a >= 2 && a > b) return { tokenMint: pool.tokenMintA, quoteMint: pool.tokenMintB, tokenIsA: true, how: 'owner' };
+        if (b >= 2 && b > a) return { tokenMint: pool.tokenMintB, quoteMint: pool.tokenMintA, tokenIsA: false, how: 'owner' };
+      }
+      const byQuote = classifyPoolSides(pool.tokenMintA, pool.tokenMintB, KNOWN_QUOTE_MINTS);
+      if (!byQuote.ambiguous) return { ...byQuote, how: 'known-quote' };
+      const first = locks.slice().sort((x, y) => x.lockedTimestamp - y.lockedTimestamp)[0];
+      const pos = first && positionInfos.get(first.position);
+      if (pos) {
+        if (pos.tickLowerIndex > pool.tickCurrentIndex) return { tokenMint: pool.tokenMintA, quoteMint: pool.tokenMintB, tokenIsA: true, how: 'tick' };
+        if (pos.tickUpperIndex <= pool.tickCurrentIndex) return { tokenMint: pool.tokenMintB, quoteMint: pool.tokenMintA, tokenIsA: false, how: 'tick' };
+      }
+      return { ...byQuote, how: 'guess' };
+    }
+
     const launches = new Map(); // tokenMint -> launch
     for (const [poolId, locks] of locksByPool.entries()) {
       const firstLock = Math.min(...locks.map((l) => l.lockedTimestamp));
       if (firstLock < sinceUnix) continue;
       const pool = pools.get(poolId);
-      const sides = classifyPoolSides(pool.tokenMintA, pool.tokenMintB, KNOWN_QUOTE_MINTS);
+      const sides = classify(pool, locks);
       const [tokenInfo, quoteInfo] = await Promise.all([
-        describeQuote(sides.tokenMint),
-        describeQuote(sides.quoteMint),
+        describeQuoteBasic(sides.tokenMint),
+        describeQuoteBasic(sides.quoteMint),
       ]);
       const decA = sides.tokenIsA ? tokenInfo.decimals : quoteInfo.decimals;
       const decB = sides.tokenIsA ? quoteInfo.decimals : tokenInfo.decimals;
@@ -846,7 +900,11 @@ export async function discoverLaunches({
           priceUsd: null,
           marketCapUsd: null,
           launchedAt: firstLock,
+          owner: locks[0].positionOwner,
           pools: [],
+          url: `/token/${sides.tokenMint}`,
+          jupUrl: jupiterSwapUrl(WSOL_MINT, sides.tokenMint),
+          solscanUrl: `https://solscan.io/token/${sides.tokenMint}`,
         });
       }
       const launch = launches.get(sides.tokenMint);
@@ -866,10 +924,28 @@ export async function discoverLaunches({
         lockedAt: firstLock,
         priceInQuote,
         priceUsd,
-        ambiguousSides: !!sides.ambiguous,
+        ambiguousSides: sides.how === 'guess',
+        sidesBy: sides.how,
         orcaUrl: `https://www.orca.so/pools/${poolId}`,
+        jupUrl: jupiterSwapUrl(sides.quoteMint, sides.tokenMint),
         solscanUrl: `https://solscan.io/account/${poolId}`,
       });
+    }
+
+    // Second pass: a quote that is itself a launch on this config (e.g.
+    // $FIREFUN) may have no aggregator price; price it from its own pools.
+    const firstPassPrice = new Map();
+    for (const launch of launches.values()) {
+      const priced = launch.pools.filter((p) => p.priceUsd).map((p) => p.priceUsd).sort((a, b) => a - b);
+      if (priced.length) firstPassPrice.set(launch.tokenMint, priced[Math.floor(priced.length / 2)]);
+    }
+    for (const launch of launches.values()) {
+      for (const p of launch.pools) {
+        if (!p.priceUsd && p.priceInQuote && firstPassPrice.has(p.quoteMint)) {
+          p.priceUsd = p.priceInQuote * firstPassPrice.get(p.quoteMint);
+          p.priceVia = 'firefun-pools';
+        }
+      }
     }
 
     const out = [];
@@ -891,6 +967,12 @@ export async function discoverLaunches({
     out.sort((a, b) => b.launchedAt - a.launchedAt);
     return { whirlpoolsConfig, sinceUnix, scannedPools: pools.size, launches: out, fetchedAt: Math.floor(Date.now() / 1000) };
   });
+}
+
+/** One launch by token mint (any age), or null. */
+export async function getLaunch(mint, { whirlpoolsConfig = DEFAULT_WHIRLPOOLS_CONFIG, sinceUnix = 0 } = {}) {
+  const feed = await discoverLaunches({ whirlpoolsConfig, sinceUnix });
+  return feed.launches.find((l) => l.tokenMint === mint) || null;
 }
 
 // ---------------------------------------------------------------------------

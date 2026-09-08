@@ -119,6 +119,8 @@
     if (s < 172800) return 'yesterday';
     return `${Math.floor(s / 86400)}d ago`;
   }
+  function jupUrl(sell, buy) { return `https://jup.ag/?sell=${encodeURIComponent(sell)}&buy=${encodeURIComponent(buy)}`; }
+  const SOL_MINT = 'So11111111111111111111111111111111111111112';
   function setMsg(sel, text, kind) {
     $(sel).innerHTML = text ? `<div class="msg ${kind || ''}">${text}</div>` : '';
   }
@@ -196,6 +198,15 @@
   }
 
   document.addEventListener('click', (ev) => {
+    const cl = ev.target.closest('[data-copylink]');
+    if (cl) {
+      ev.preventDefault();
+      navigator.clipboard?.writeText(cl.dataset.copylink).then(() => {
+        cl.innerHTML = '<i class="fas fa-check"></i> copied';
+        setTimeout(() => { cl.innerHTML = '<i class="far fa-copy"></i> link'; }, 1200);
+      });
+      return;
+    }
     const b = ev.target.closest('[data-copy]');
     if (!b) return;
     const el = $(b.getAttribute('data-copy'));
@@ -219,7 +230,7 @@
     $('#tab-launch').classList.toggle('hidden', name !== 'launch');
     $('#tab-explore').classList.toggle('hidden', name !== 'explore');
     if (name === 'explore') loadFeed();
-    try { history.replaceState(null, '', name === 'launch' ? '#launch' : '#'); } catch (_) { /* fine */ }
+    if (!tokenPageMint) { try { history.replaceState(null, '', name === 'launch' ? '#launch' : '#'); } catch (_) { /* fine */ } }
     renderDock();
   }
   $$('.tab[data-tab]').forEach((btn) => btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab'))));
@@ -883,7 +894,7 @@
       r.results.forEach((res, i) => { progSet(`p-${i}`, 'done'); progSet(`p-${i}-pool`, 'done', acctLink(res.poolId)); progSet(`p-${i}-pos`, 'done', acctLink(res.positionMint)); progSet(`p-${i}-lock`, 'done', txLink(res.lockTxId)); });
       renderLaunchResults();
       setPill('#launchState', `${r.results.length} pools locked`, 'ok');
-      setMsg('#launchMsg', 'Every position is permanently locked. Enter your wallet below to receive the locked positions, the un-pooled supply and the leftover SOL.', 'ok');
+      setMsg('#launchMsg', `Every position is permanently locked. Your token page: <a href="/token/${esc(token.mint)}" class="mono">${esc(location.host)}/token/${short(token.mint, 6)}</a>. Enter your wallet below to receive the locked positions, the un-pooled supply and the leftover SOL.`, 'ok');
     } catch (err) {
       stopProgressPolling();
       if (Array.isArray(err.partialResults) && err.partialResults.length) {
@@ -912,7 +923,7 @@
     $('#launchResults').innerHTML = L.results.map((r) => `<div class="res pop">
       <div class="n">${esc(r.quoteSymbol)}${r.forced ? ' <i class="fas fa-lock" style="font-size:9px;color:var(--gold)"></i>' : ''} <span>· ${fmtPct(r.supplyPercent)} · opened ${fmtUsd(r.launchPriceUsd)}</span></div>
       <span class="lk${r.locked ? '' : ' bad'}"><i class="fas fa-${r.locked ? 'lock' : 'exclamation-triangle'}"></i> ${r.locked ? 'locked' : 'not locked'}</span>
-      <div class="links">pool ${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a> · position ${acctLink(r.positionMint)}</div>
+      <div class="links">pool ${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="${jupUrl(r.quoteMint, state.token?.mint || '')}">jup</a> · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a> · position ${acctLink(r.positionMint)}</div>
       <span class="tx">${txLink(r.lockTxId)}</span>
     </div>`).join('');
   }
@@ -986,8 +997,11 @@
   // Explore feed
   // ---------------------------------------------------------------------
 
+  const tokenPageMint = (() => { const m = /^\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(location.pathname); return m ? m[1] : null; })();
+
   let feedTimer = null;
   async function loadFeed() {
+    if (tokenPageMint) return loadTokenPage();
     $('#feedSpin').classList.add('spin');
     $('#feedMsg').className = 'feedstat';
     $('#feedMsg').textContent = 'scanning the config…';
@@ -1007,17 +1021,39 @@
   }
   $('#btnRefreshFeed').addEventListener('click', loadFeed);
 
+  async function loadTokenPage() {
+    $('#tokenPageBar').classList.remove('hidden');
+    $('#tokenPageNote').textContent = short(tokenPageMint, 6);
+    $('#feedSpin').classList.add('spin');
+    $('#feedMsg').className = 'feedstat';
+    $('#feedMsg').textContent = 'loading token…';
+    try {
+      const { launch } = await api(`/api/orca/token/${encodeURIComponent(tokenPageMint)}`);
+      document.title = `${launch.name || launch.symbol} · FireFun`;
+      $('#feedMsg').textContent = `${launch.pools.length} locked pool${launch.pools.length === 1 ? '' : 's'} · launched ${new Date(launch.launchedAt * 1000).toLocaleString()}`;
+      $('#feed').innerHTML = renderLaunchCard(launch, 0);
+    } catch (err) {
+      $('#feedMsg').className = 'feedstat bad';
+      $('#feedMsg').textContent = err.status === 404 ? 'No locked pools for this token on our config.' : describeError(err);
+      $('#feed').innerHTML = '';
+    }
+    $('#feedSpin').classList.remove('spin');
+    clearTimeout(feedTimer);
+    feedTimer = setTimeout(() => { if (tab === 'explore') loadFeed(); }, 60_000);
+  }
+
   function renderLaunchCard(l, i) {
     const avatar = l.imageUrl ? `<img class="avatar" src="${esc(l.imageUrl)}" alt="">` : '<span class="avatar"></span>';
     const pools = l.pools.map((p) => `<div class="pool">
       <div class="n">${esc(p.quoteSymbol)} <span>· ${p.feePercent}% fee</span></div>
       <span class="lk"><i class="fas fa-lock"></i> ${p.lockedPositions} permanent</span>
       <div class="pr2">${p.priceInQuote ? `${fmtNum(p.priceInQuote, 6)} ${esc(p.quoteSymbol)}` : '—'} · ${fmtUsd(p.priceUsd)}</div>
-      <div class="lnk"><a target="_blank" rel="noopener" href="${esc(p.orcaUrl)}" style="font-weight:800">trade</a> · <a class="m" target="_blank" rel="noopener" href="${esc(p.solscanUrl)}">pool</a></div>
+      <div class="lnk"><a target="_blank" rel="noopener" href="${esc(p.jupUrl || jupUrl(p.quoteMint, l.tokenMint))}" style="font-weight:800">jup</a> · <a target="_blank" rel="noopener" href="${esc(p.orcaUrl)}">orca</a> · <a class="m" target="_blank" rel="noopener" href="${esc(p.solscanUrl)}">pool</a></div>
     </div>`).join('');
-    return `<div class="lc pop">
+    const pageUrl = `${location.origin}/token/${l.tokenMint}`;
+    return `<div class="lc pop" id="launch-${esc(l.tokenMint)}">
       <div class="head">${avatar}
-        <div style="min-width:0;flex:1"><div class="t"><span class="nm">${esc(l.name || l.symbol)}</span><span class="sy">${esc(l.symbol)}</span></div><div class="s">${acctLink(l.tokenMint, short(l.tokenMint, 5))} · ${ago(l.launchedAt)}</div></div>
+        <div style="min-width:0;flex:1"><div class="t"><a class="nm" href="/token/${esc(l.tokenMint)}" style="color:inherit">${esc(l.name || l.symbol)}</a><span class="sy">${esc(l.symbol)}</span></div><div class="s">${acctLink(l.tokenMint, short(l.tokenMint, 5))} · ${ago(l.launchedAt)} · <a target="_blank" rel="noopener" href="${jupUrl(SOL_MINT, l.tokenMint)}" style="font-weight:800">buy on jup</a> · <a href="#" data-copylink="${esc(pageUrl)}" class="m" style="color:var(--muted)"><i class="far fa-copy"></i> link</a></div></div>
         <div class="mc"><div class="v${i === 0 ? ' gold' : ''}">${fmtUsd(l.marketCapUsd)}</div><div class="k sm">mcap</div></div>
       </div>
       <div class="stats c3">
@@ -1065,7 +1101,7 @@
     }
     renderWallet();
     renderTokenCreated();
-    if (location.hash === '#launch' || (state.wallet && !state.finish)) showTab('launch');
+    if (!tokenPageMint && (location.hash === '#launch' || (state.wallet && !state.finish))) showTab('launch');
     else showTab('explore');
     if (state.launch?.results?.length) {
       buildLaunchTree({ quotes: state.launch.results.map((r) => ({ mint: r.quoteMint, supplyPercent: r.supplyPercent })) });

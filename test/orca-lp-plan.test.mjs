@@ -23,6 +23,7 @@ import {
 
 const EVUL = 'EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump';
 const INFITY = '6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f';
+const FIREFUN = '5SyfywcaD8kiEGyrt7cg4FnVqxTcuut5KCcWgh44o3UG';
 const SOL = 'So11111111111111111111111111111111111111112';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -30,15 +31,16 @@ const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 // Forced quotes
 // ---------------------------------------------------------------------------
 
-test('the two forced quotes are the EVUL pump token and infity, min 1% each', () => {
-  assert.deepEqual(FORCED_QUOTES.map((q) => q.mint), [EVUL, INFITY]);
+test('the three forced quotes are TOKEN, INFITY and FIREFUN, min 1% each', () => {
+  assert.deepEqual(FORCED_QUOTES.map((q) => q.mint), [EVUL, INFITY, FIREFUN]);
   assert.equal(FORCED_MIN_SUPPLY_PCT, 1);
   for (const q of FORCED_QUOTES) {
     assert.equal(q.forced, true);
     assert.equal(q.minSupplyPercent, 1);
-    assert.equal(q.programId, 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
   }
+  assert.equal(FORCED_QUOTES[0].programId, 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
   assert.equal(FORCED_QUOTES[1].transferFeeBps, 690);
+  assert.equal(FORCED_QUOTES[2].programId, 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 });
 
 test('normalizeOrcaQuotes always injects the forced quotes at the minimum', () => {
@@ -46,10 +48,11 @@ test('normalizeOrcaQuotes always injects the forced quotes at the minimum', () =
   assert.deepEqual(plan.quotes.map((q) => [q.mint, q.supplyPercent, q.forced]), [
     [EVUL, 1, true],
     [INFITY, 1, true],
+    [FIREFUN, 1, true],
     [SOL, 50, false],
   ]);
-  assert.equal(plan.totalPercent, 52);
-  assert.equal(plan.remainderPercent, 48);
+  assert.equal(plan.totalPercent, 53);
+  assert.equal(plan.remainderPercent, 47);
 });
 
 test('normalizeOrcaQuotes keeps a larger explicit forced allocation', () => {
@@ -58,7 +61,7 @@ test('normalizeOrcaQuotes keeps a larger explicit forced allocation', () => {
     { mint: EVUL, supplyPercent: 5 },
     { mint: USDC, supplyPercent: 20 },
   ]);
-  assert.deepEqual(plan.quotes.map((q) => [q.mint, q.supplyPercent]), [[EVUL, 5], [INFITY, 10], [USDC, 20]]);
+  assert.deepEqual(plan.quotes.map((q) => [q.mint, q.supplyPercent]), [[EVUL, 5], [INFITY, 10], [FIREFUN, 1], [USDC, 20]]);
 });
 
 test('normalizeOrcaQuotes rejects a forced quote under 1%', () => {
@@ -77,28 +80,30 @@ test('normalizeOrcaQuotes rejects >100%, duplicates, zero optional shares, bad m
   assert.throws(() => normalizeOrcaQuotes([{ mint: SOL, supplyPercent: 'x' }]), /must be a number/);
 });
 
-test('normalizeOrcaQuotes with no input is just the forced pair at 1% each', () => {
+test('normalizeOrcaQuotes with no input is just the forced trio at 1% each', () => {
   const plan = normalizeOrcaQuotes(undefined);
-  assert.equal(plan.quotes.length, 2);
-  assert.equal(plan.totalPercent, 2);
-  assert.equal(plan.remainderPercent, 98);
+  assert.equal(plan.quotes.length, 3);
+  assert.equal(plan.totalPercent, 3);
+  assert.equal(plan.remainderPercent, 97);
 });
 
 test('defaultQuoteSplit gives the remainder to the optional picks evenly', () => {
   assert.deepEqual(defaultQuoteSplit([SOL]), [
     { mint: EVUL, supplyPercent: 1 },
     { mint: INFITY, supplyPercent: 1 },
-    { mint: SOL, supplyPercent: 98 },
+    { mint: FIREFUN, supplyPercent: 1 },
+    { mint: SOL, supplyPercent: 97 },
   ]);
   const three = defaultQuoteSplit([SOL, USDC, 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']);
   const total = three.reduce((s, q) => s + q.supplyPercent, 0);
   assert.equal(Math.round(total * 100) / 100, 100);
   assert.deepEqual(defaultQuoteSplit([]), [
-    { mint: EVUL, supplyPercent: 50 },
-    { mint: INFITY, supplyPercent: 50 },
+    { mint: EVUL, supplyPercent: 33.33 },
+    { mint: INFITY, supplyPercent: 33.33 },
+    { mint: FIREFUN, supplyPercent: 33.33 },
   ]);
   // Forced mints passed as "optional" are ignored, not doubled.
-  assert.equal(defaultQuoteSplit([EVUL, SOL]).length, 3);
+  assert.equal(defaultQuoteSplit([EVUL, SOL]).length, 4);
 });
 
 // ---------------------------------------------------------------------------
@@ -218,6 +223,7 @@ test('estimateOrcaLaunchSol scales per pool with a safety buffer', () => {
   assert.equal(three.poolCount, 3);
   assert.equal(three.rawSol, 0.165);
   assert.equal(three.totalSol, 0.198);
+  assert.equal(estimateOrcaLaunchSol({ poolCount: 4 }).totalSol, 0.24);
   const one = estimateOrcaLaunchSol({ poolCount: 1, tokenCreateSol: 0 });
   assert.equal(one.totalSol, 0.054);
 });

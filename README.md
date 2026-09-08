@@ -28,10 +28,12 @@ price), fund a throwaway wallet, and press Launch:
 5. hands the locked positions to your wallet with
    `transfer_locked_position` and sweeps the un-pooled supply + SOL.
 
-Two quotes are always in and cannot be removed, **min 1% of supply each**:
-`EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump` ($TOKEN, Token-2022) and
+Three quotes are always in and cannot be removed, **min 1% of supply each**:
+`EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump` ($TOKEN, Token-2022),
 `6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f` ($INFITY, Token-2022 with a
-6.9% transfer fee). SOL / USDC / USDT / any other priced mint are optional.
+6.9% transfer fee) and `5SyfywcaD8kiEGyrt7cg4FnVqxTcuut5KCcWgh44o3UG`
+($FIREFUN). SOL / USDC / USDT / any other priced mint are optional. Every
+launched token gets a page at `/token/<mint>` with Jupiter links per pool.
 
 The **Explore** tab lists every token whose pools were locked on the config
 since the feature shipped (`orcaLpPlan.js` → `DISCOVERY_SINCE_UNIX`), with

@@ -253,13 +253,13 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
     <div class="brand"><i class="fas fa-fire"></i>FireFun</div>
     <div class="badges"><span class="pill" id="rpcBadge">mainnet</span><span class="pill ok">orca</span><span class="pill" id="feeBadge" title="Config protocol fee (share of swap fees). Must be Orca's 25% maximum.">fee ?</span></div>
     <div class="tabs">
-      <button class="tab is-active" data-tab="launch"><i class="fas fa-rocket" style="margin-right:6px"></i>Launch</button>
-      <button class="tab" data-tab="explore"><i class="fas fa-compass" style="margin-right:6px"></i>Explore</button>
+      <button class="tab is-active" data-tab="explore"><i class="fas fa-compass" style="margin-right:6px"></i>Explore</button>
+      <button class="tab" data-tab="launch"><i class="fas fa-rocket" style="margin-right:6px"></i>Launch</button>
     </div>
   </div></div>
 
   <!-- ============================ LAUNCH ============================ -->
-  <section id="tab-launch" class="screen">
+  <section id="tab-launch" class="screen hidden">
 
     <div class="hero">
       <h1>As many quotes<br>as you want.<br><span class="shine">100% of the locked LP. Yours.</span></h1>
@@ -393,11 +393,12 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
   </section>
 
   <!-- ============================ EXPLORE ============================ -->
-  <section id="tab-explore" class="screen hidden">
+  <section id="tab-explore" class="screen">
     <div class="xhead">
       <div style="min-width:0"><h1>Launches</h1><p>Every token locked on <a id="exploreConfig" class="mono" style="font-size:12px" target="_blank" rel="noopener" href="#"></a> since <span id="exploreSince"></span>.</p></div>
       <button id="btnRefreshFeed" class="btn"><i class="fas fa-sync" id="feedSpin"></i>Refresh</button>
     </div>
+    <button id="btnStartLaunch" class="btn grad" style="width:100%;min-height:52px;border-radius:14px;font-size:16px;box-shadow:0 10px 30px -12px rgba(255,160,80,.6)"><i class="fas fa-rocket" style="margin-right:8px"></i>Launch your own</button>
     <div id="feedMsg" class="feedstat">scanning the config…</div>
     <div id="feed" style="display:grid;gap:14px"></div>
   </section>

@@ -81,6 +81,15 @@ export const FORCED_QUOTES = Object.freeze([
     forced: true,
     minSupplyPercent: FORCED_MIN_SUPPLY_PCT,
   }),
+  Object.freeze({
+    mint: '5SyfywcaD8kiEGyrt7cg4FnVqxTcuut5KCcWgh44o3UG',
+    symbol: 'FIREFUN',
+    name: '$FIREFUN (firefun.xyz)',
+    decimals: 9,
+    programId: TOKEN_PROGRAM,
+    forced: true,
+    minSupplyPercent: FORCED_MIN_SUPPLY_PCT,
+  }),
 ]);
 
 export const OPTIONAL_QUOTES = Object.freeze([
@@ -387,6 +396,11 @@ export function classifyPoolSides(mintA, mintB, quoteMints = KNOWN_QUOTE_MINTS) 
   // Both or neither known: treat B as the quote (SOL/USDC usually sort
   // there) so the feed still renders something sensible.
   return { tokenMint: mintA, quoteMint: mintB, tokenIsA: true, ambiguous: true };
+}
+
+/** Jupiter swap link: sell `sellMint` for `buyMint`. */
+export function jupiterSwapUrl(sellMint, buyMint) {
+  return `https://jup.ag/?sell=${encodeURIComponent(sellMint)}&buy=${encodeURIComponent(buyMint)}`;
 }
 
 // ---------------------------------------------------------------------------

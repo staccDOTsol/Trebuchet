@@ -25,6 +25,7 @@ import {
   createOrcaPoolsAndLock,
   finishOrcaLaunch,
   discoverLaunches,
+  getLaunch,
   estimateOrcaLaunch,
 } from './orcaLpService.js';
 import {
@@ -128,6 +129,19 @@ export function registerOrcaRoutes(app, deps) {
         : DISCOVERY_SINCE_UNIX;
       const feed = await discoverLaunches({ whirlpoolsConfig, sinceUnix: since });
       res.json({ success: true, ...feed });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get('/api/orca/token/:mint', async (req, res) => {
+    try {
+      const mint = String(req.params.mint || '');
+      if (!isPubkeyish(mint)) return res.status(400).json({ success: false, error: 'bad mint' });
+      const whirlpoolsConfig = isPubkeyish(req.query.config) ? req.query.config : DEFAULT_WHIRLPOOLS_CONFIG;
+      const launch = await getLaunch(mint, { whirlpoolsConfig, sinceUnix: 0 });
+      if (!launch) return res.status(404).json({ success: false, error: 'no locked pools for this token on the config' });
+      res.json({ success: true, launch });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }

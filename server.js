@@ -432,6 +432,10 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(publicDir, 'orca.html'));
 });
 app.get('/orca', (_req, res) => res.redirect('/'));
+// Token deeplink: the same page, opened on that token's card.
+app.get('/token/:mint', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'orca.html'));
+});
 
 // Opt-in diagnostic endpoint for splash-video 404 debugging. It reports local
 // filesystem/process paths, so keep it unavailable in normal desktop/web runs.

@@ -274,6 +274,21 @@ async function execute(ctx, builder, { label, alreadyDone = null, onRetry = null
   return res.skipped ? null : res.value;
 }
 
+// Read-after-write against a load-balanced RPC pool: the node that answers
+// the read may not have the account the previous node just confirmed. Poll
+// (up to ~45s) before concluding a confirmed transaction "didn't happen".
+async function waitFor(label, read, { attempts = 30, delayMs = 1500 } = {}) {
+  let last = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      last = await read();
+      if (last) return last;
+    } catch (_) { /* transient read */ }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error(`${label} not visible on the RPC after ${Math.round(attempts * delayMs / 1000)}s — the transaction confirmed; press Launch again to resume`);
+}
+
 async function accountExists(connection, pubkey) {
   const info = await connection.getAccountInfo(pubkey, 'confirmed');
   return !!info;
@@ -464,8 +479,7 @@ export async function createOrcaPoolsAndLock({
           label: `orca create pool ${q.symbol}`,
           alreadyDone: () => accountExists(connection, poolKey),
         });
-        poolData = await ctx.fetcher.getPool(poolKey, IGNORE_CACHE);
-        if (!poolData) throw new Error(`pool ${result.poolId} missing after create`);
+        poolData = await waitFor(`pool ${result.poolId}`, () => ctx.fetcher.getPool(poolKey, IGNORE_CACHE));
         progress({ stage: 'pool_create_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, txId: result.createPoolTxId });
       }
 
@@ -559,15 +573,14 @@ export async function createOrcaPoolsAndLock({
         result.locked = true;
         progress({ stage: 'lock_exists', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: result.positionMint });
       } else {
-        const posData = await ctx.fetcher.getPosition(positionPda.publicKey, IGNORE_CACHE);
-        if (!posData) throw new Error(`position ${result.position} missing after open`);
+        const posData = await waitFor(`position ${result.position}`, () => ctx.fetcher.getPosition(positionPda.publicKey, IGNORE_CACHE));
         // Use the position's real range (a resumed position keeps the range
         // it was opened with, even if the pool tick moved since).
         const tickLower = posData.tickLowerIndex;
         const tickUpper = posData.tickUpperIndex;
         result.tickLower = tickLower;
         result.tickUpper = tickUpper;
-        const freshPool = await ctx.fetcher.getPool(poolKey, IGNORE_CACHE);
+        const freshPool = await waitFor(`pool ${result.poolId}`, () => ctx.fetcher.getPool(poolKey, IGNORE_CACHE));
 
         const depositLockTx = new TransactionBuilder(connection, ctx.wallet, ctx.txBuilderOpts);
         const needsDeposit = posData.liquidity.isZero();

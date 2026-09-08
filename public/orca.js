@@ -134,7 +134,66 @@
     el.textContent = status === 'done' ? '✓' : String(n);
   }
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-  function signerFields() { return { walletPublicKey: state.wallet.publicKey }; }
+
+  // ---- base58 (Solana alphabet) ---------------------------------------
+  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  function b58decode(str) {
+    const bytes = [0];
+    for (const ch of str) {
+      const v = B58.indexOf(ch);
+      if (v < 0) throw new Error('not base58');
+      let carry = v;
+      for (let i = 0; i < bytes.length; i++) { carry += bytes[i] * 58; bytes[i] = carry & 0xff; carry >>= 8; }
+      while (carry) { bytes.push(carry & 0xff); carry >>= 8; }
+    }
+    for (const ch of str) { if (ch !== '1') break; bytes.push(0); }
+    return Uint8Array.from(bytes.reverse());
+  }
+  function b58encode(bytes) {
+    const digits = [0];
+    for (const b of bytes) {
+      let carry = b;
+      for (let i = 0; i < digits.length; i++) { carry += digits[i] << 8; digits[i] = carry % 58; carry = (carry / 58) | 0; }
+      while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+    }
+    let out = '';
+    for (const b of bytes) { if (b !== 0) break; out += '1'; }
+    for (let i = digits.length - 1; i >= 0; i--) out += B58[digits[i]];
+    return out;
+  }
+  // Accepts a base58 64-byte secret or a JSON array; returns { secretKey, publicKey }.
+  function parseSecretKey(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return null;
+    let bytes;
+    if (text.startsWith('[')) bytes = Uint8Array.from(JSON.parse(text));
+    else bytes = b58decode(text);
+    if (bytes.length !== 64) throw new Error(`secret key must be 64 bytes (got ${bytes.length})`);
+    return { secretKey: Array.from(bytes), publicKey: b58encode(bytes.subarray(32)) };
+  }
+
+  // Signer fields for launch-wallet requests. The server first looks the
+  // key up in its recovery list by public key; when this page holds the
+  // secret (pasted, or just generated) it is sent inline as the fallback.
+  function signerFields() {
+    const out = { walletPublicKey: state.wallet.publicKey };
+    if (Array.isArray(state.wallet.secretKey)) out.tempWalletSecretKey = JSON.stringify(state.wallet.secretKey);
+    return out;
+  }
+  const SESSION_SECRET_KEY = 'firefun.launch.secret';
+  function stashSecret() {
+    try {
+      if (state.wallet?.secretKey) sessionStorage.setItem(SESSION_SECRET_KEY, JSON.stringify({ publicKey: state.wallet.publicKey, secretKey: state.wallet.secretKey }));
+      else sessionStorage.removeItem(SESSION_SECRET_KEY);
+    } catch (_) { /* tab-scoped convenience */ }
+  }
+  function isSignerError(err) {
+    return /could not resolve a signer|resolved secret key must be/i.test(String(err && err.message || ''));
+  }
+  function needSecret(show) {
+    $('#needSecret').classList.toggle('hidden', !show);
+    if (show) { scrollToCard('#card-wallet'); $('#lateSecret').focus(); }
+  }
 
   document.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-copy]');
@@ -487,6 +546,9 @@
       const hasSecret = !!state.wallet.secretKeyB58;
       $('#secretBlock').classList.toggle('hidden', !hasSecret);
       $('#noSecret').classList.toggle('hidden', hasSecret);
+      $('#noSecret').textContent = state.wallet.secretKey && !hasSecret
+        ? 'secret key loaded in this tab — it is sent with each signed request and forgotten when the tab closes'
+        : 'secret held by the server (recovery list) — not shown again';
       const sec = $('#walletSecret');
       sec.dataset.full = state.wallet.secretKeyB58 || '';
       $('#savedSecret').classList.toggle('on', state.savedSecret);
@@ -503,8 +565,9 @@
     $('#btnGenWallet').disabled = true;
     try {
       const { wallet } = await api('/api/generate-wallet', { body: {} });
-      state.wallet = { publicKey: wallet.publicKey, secretKeyB58: wallet.secretKeyB58, qrCode: wallet.qrCode };
+      state.wallet = { publicKey: wallet.publicKey, secretKeyB58: wallet.secretKeyB58, qrCode: wallet.qrCode, secretKey: wallet.secretKey || null };
       state.savedSecret = false;
+      stashSecret();
       state.token = null; state.launch = null; state.finish = null;
       lastBalance = 0;
       $('#walletSecret').textContent = '••••••••••••••••••••••••••••••••';
@@ -517,14 +580,48 @@
     }
   });
 
-  $('#btnUseWallet').addEventListener('click', async () => {
-    const pk = $('#existingWallet').value.trim();
-    if (!isPubkey(pk)) return alert('Enter a wallet public key.');
+  async function adoptWallet({ publicKey, secretKey }) {
     let qrCode = null;
-    try { const r = await api(`/api/wallet-qr?publicKey=${encodeURIComponent(pk)}`); qrCode = r.qrCode || null; } catch (_) { /* optional */ }
-    state.wallet = { publicKey: pk, secretKeyB58: null, qrCode };
+    try { const r = await api(`/api/wallet-qr?publicKey=${encodeURIComponent(publicKey)}`); qrCode = r.qrCode || null; } catch (_) { /* optional */ }
+    state.wallet = { publicKey, secretKeyB58: null, qrCode, secretKey: secretKey || null };
     state.savedSecret = true;
+    lastBalance = null;
+    stashSecret();
     renderWallet(); persist();
+  }
+
+  $('#btnUseWallet').addEventListener('click', async () => {
+    const secretRaw = $('#existingSecret').value.trim();
+    const pk = $('#existingWallet').value.trim();
+    try {
+      if (secretRaw) {
+        const parsed = parseSecretKey(secretRaw);
+        if (pk && isPubkey(pk) && pk !== parsed.publicKey) throw new Error(`that secret key belongs to ${short(parsed.publicKey)}, not ${short(pk)}`);
+        $('#existingSecret').value = '';
+        await adoptWallet(parsed);
+        return;
+      }
+      if (!isPubkey(pk)) throw new Error('Enter the wallet public key, or paste its secret key.');
+      await adoptWallet({ publicKey: pk, secretKey: null });
+    } catch (err) {
+      alert(describeError(err));
+    }
+  });
+
+  $('#btnLateSecret').addEventListener('click', () => {
+    try {
+      const parsed = parseSecretKey($('#lateSecret').value);
+      if (!parsed) throw new Error('Paste the secret key first.');
+      if (parsed.publicKey !== state.wallet.publicKey) throw new Error(`that secret key belongs to ${short(parsed.publicKey)}, not this wallet (${short(state.wallet.publicKey)})`);
+      state.wallet.secretKey = parsed.secretKey;
+      $('#lateSecret').value = '';
+      stashSecret();
+      needSecret(false);
+      setMsg('#launchMsg', 'Secret key loaded for this tab. Press Launch again.', 'ok');
+      updateGates();
+    } catch (err) {
+      alert(describeError(err));
+    }
   });
 
   $('#btnRevealSecret').addEventListener('click', () => {
@@ -546,6 +643,8 @@
     }
     state.wallet = null; state.token = null; state.launch = null; state.finish = null; state.savedSecret = false;
     lastBalance = null;
+    stashSecret();
+    needSecret(false);
     $('#launchProg').innerHTML = ''; $('#launchResults').classList.add('hidden'); $('#finishProg').innerHTML = ''; $('#finishResults').classList.add('hidden');
     $('#tokenCreated').classList.add('hidden'); setMsg('#launchMsg', ''); setMsg('#finishMsg', '');
     setPill('#tokenState', ''); setPill('#launchState', ''); setPill('#finishState', '');
@@ -789,8 +888,13 @@
         persist();
       }
       setPill('#launchState', 'failed', 'bad');
-      const retry = err.failedPhase === 'pre_flight' || err.code === 'OP_IN_FLIGHT' ? '' : '<br><span class="m">Nothing is lost: fix the cause (usually funding) and press Launch again with this wallet — finished pools are skipped.</span>';
-      setMsg('#launchMsg', `${esc(describeError(err))}${retry}`, 'bad');
+      if (isSignerError(err)) {
+        setMsg('#launchMsg', 'This server does not hold the key for this launch wallet. Paste its secret key in the wallet card, then press Launch again.', 'bad');
+        needSecret(true);
+      } else {
+        const retry = err.failedPhase === 'pre_flight' || err.code === 'OP_IN_FLIGHT' ? '' : '<br><span class="m">Nothing is lost: fix the cause (usually funding) and press Launch again with this wallet — finished pools are skipped.</span>';
+        setMsg('#launchMsg', `${esc(describeError(err))}${retry}`, 'bad');
+      }
     } finally {
       state.launching = false;
       startBalancePolling();
@@ -855,7 +959,12 @@
     } catch (err) {
       stopProgressPolling();
       setPill('#finishState', 'failed', 'bad');
-      setMsg('#finishMsg', `${esc(describeError(err))}<br><span class="m">Press Send again; completed transfers are skipped.</span>`, 'bad');
+      if (isSignerError(err)) {
+        setMsg('#finishMsg', 'This server does not hold the key for this launch wallet. Paste its secret key in the wallet card, then press Send again.', 'bad');
+        needSecret(true);
+      } else {
+        setMsg('#finishMsg', `${esc(describeError(err))}<br><span class="m">Press Send again; completed transfers are skipped.</span>`, 'bad');
+      }
     } finally {
       state.finishing = false;
       startBalancePolling();
@@ -941,6 +1050,10 @@
       }
       $('#destWallet').value = state.destWallet;
     }
+    try {
+      const stash = JSON.parse(sessionStorage.getItem(SESSION_SECRET_KEY) || 'null');
+      if (stash && state.wallet && stash.publicKey === state.wallet.publicKey) state.wallet.secretKey = stash.secretKey;
+    } catch (_) { /* no stash */ }
     renderImplied();
     try {
       await loadMeta(state.config);

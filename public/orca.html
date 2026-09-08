@@ -1,329 +1,407 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FireFun · launch</title>
-    <link rel="stylesheet" href="vendor/bulma/bulma.min.css">
-    <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
-    <style>
-        :root {
-            --bg: #0f1116;
-            --panel: #171a22;
-            --panel-2: #1f2330;
-            --line: #2a2f3d;
-            --text: #e8eaf0;
-            --muted: #9aa1b3;
-            --accent: #ffd166;
-            --accent-2: #4cc9f0;
-            --ok: #4ade80;
-            --bad: #f87171;
-            --warn: #fbbf24;
-        }
-        html, body { background: var(--bg); color: var(--text); }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        a { color: var(--accent-2); }
-        a:hover { color: #8fe3ff; }
-        .topbar {
-            display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-            padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--line);
-            background: linear-gradient(180deg, #151822, #0f1116);
-            position: sticky; top: 0; z-index: 20;
-        }
-        .topbar .brand { font-weight: 800; font-size: 1.15rem; letter-spacing: 0.02em; color: var(--text); }
-        .topbar .brand span { color: var(--accent); }
-        .topbar .tabs-row { display: flex; gap: 0.35rem; margin-left: auto; }
-        .tabbtn {
-            background: transparent; border: 1px solid var(--line); color: var(--muted);
-            padding: 0.4rem 0.9rem; border-radius: 999px; cursor: pointer; font-weight: 600;
-        }
-        .tabbtn.is-active { background: var(--accent); color: #111; border-color: var(--accent); }
-        .badge {
-            font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px;
-            border: 1px solid var(--line); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
-        }
-        .badge.ok { color: var(--ok); border-color: #1e4d31; }
-        .badge.bad { color: var(--bad); border-color: #5a2323; }
-        .badge.warn { color: var(--warn); border-color: #5a4a12; }
-        .wrap { max-width: 980px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
-        .hero-line { margin: 0.5rem 0 1.25rem; color: var(--muted); }
-        .hero-line strong { color: var(--text); }
-        .card-x {
-            background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-            padding: 1.1rem 1.2rem; margin-bottom: 1rem;
-        }
-        .card-x.is-locked { opacity: 0.55; pointer-events: none; }
-        .card-x.is-done { border-color: #1e4d31; }
-        .card-x h2 {
-            display: flex; align-items: center; gap: 0.6rem; font-size: 1.05rem; font-weight: 800;
-            margin: 0 0 0.75rem; color: var(--text);
-        }
-        .card-x h2 .num {
-            width: 1.7rem; height: 1.7rem; border-radius: 50%; display: inline-flex; align-items: center;
-            justify-content: center; background: var(--panel-2); border: 1px solid var(--line); font-size: 0.85rem;
-        }
-        .card-x.is-done h2 .num { background: #1e4d31; border-color: #1e4d31; color: var(--ok); }
-        .card-x .hint { color: var(--muted); font-size: 0.9rem; }
-        .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-        .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; }
-        @media (max-width: 700px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
-        .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
-        .input, .textarea, .select select {
-            background: var(--panel-2); color: var(--text); border-color: var(--line);
-        }
-        .input::placeholder, .textarea::placeholder { color: #5b6275; }
-        .input:focus, .textarea:focus, .select select:focus { border-color: var(--accent); box-shadow: none; }
-        .button.is-primary { background: var(--accent); color: #111; border: 0; font-weight: 800; }
-        .button.is-primary:hover { background: #ffdc85; color: #111; }
-        .button.is-primary[disabled] { background: #5a4d25; color: #2b2b2b; }
-        .button.is-ghost { background: transparent; color: var(--accent-2); border: 1px solid var(--line); }
-        .button.is-ghost:hover { border-color: var(--accent-2); color: #8fe3ff; }
-        .button.is-danger-x { background: #5a2323; color: #fff; border: 0; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-        .addr { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 0.3rem 0.6rem; }
-        .addr button { background: transparent; border: 0; color: var(--muted); cursor: pointer; }
-        .addr button:hover { color: var(--accent); }
-        .mcap-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
-        .mcap-presets button {
-            background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 999px;
-            padding: 0.25rem 0.7rem; cursor: pointer; font-weight: 700; font-size: 0.85rem;
-        }
-        .mcap-presets button.is-active { border-color: var(--accent); color: var(--accent); }
-        .implied { margin-top: 0.5rem; color: var(--muted); font-size: 0.9rem; }
-        .implied strong { color: var(--text); }
-        .quote-row {
-            display: grid; grid-template-columns: auto 1fr auto auto; gap: 0.75rem; align-items: center;
-            padding: 0.55rem 0.6rem; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 0.45rem;
-            background: var(--panel-2);
-        }
-        .quote-row.is-off { opacity: 0.5; }
-        .quote-row .qname { font-weight: 700; }
-        .quote-row .qmeta { color: var(--muted); font-size: 0.8rem; }
-        .quote-row img { width: 26px; height: 26px; border-radius: 50%; background: #000; object-fit: cover; }
-        .quote-row .pct { width: 7rem; }
-        .quote-row input[type="checkbox"] { transform: scale(1.2); }
-        .lockchip { color: var(--accent); font-size: 0.75rem; font-weight: 700; margin-left: 0.4rem; }
-        .summary { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-top: 0.75rem; }
-        .summary .k { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        .summary .v { font-size: 1.15rem; font-weight: 800; }
-        details.adv { margin-top: 0.75rem; }
-        details.adv summary { cursor: pointer; color: var(--muted); font-weight: 700; }
-        .msg { padding: 0.6rem 0.8rem; border-radius: 10px; border: 1px solid var(--line); margin-top: 0.6rem; font-size: 0.9rem; }
-        .msg.bad { border-color: #5a2323; background: #2a1414; color: #ffb4b4; }
-        .msg.ok { border-color: #1e4d31; background: #10261a; color: #b6f5cc; }
-        .msg.warn { border-color: #5a4a12; background: #2a2208; color: #ffe1a0; }
-        .qr { background: #fff; padding: 6px; border-radius: 8px; width: 150px; height: 150px; }
-        .prog { list-style: none; margin: 0.75rem 0 0; padding: 0; }
-        .prog li { display: grid; grid-template-columns: 1.4rem 1fr auto; gap: 0.5rem; align-items: center; padding: 0.35rem 0; border-bottom: 1px dashed var(--line); }
-        .prog li.sub { padding-left: 1.4rem; color: var(--muted); font-size: 0.9rem; }
-        .prog .st { width: 1.2rem; text-align: center; }
-        .prog .st.pending { color: #3a4152; }
-        .prog .st.running { color: var(--accent); }
-        .prog .st.done { color: var(--ok); }
-        .prog .st.failed { color: var(--bad); }
-        .prog .lnk { font-size: 0.8rem; }
-        .kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.9rem; font-size: 0.9rem; }
-        .kv .k { color: var(--muted); }
-        .feed { display: grid; gap: 0.9rem; }
-        .launch-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.1rem; }
-        .launch-card .head { display: flex; gap: 0.8rem; align-items: center; }
-        .launch-card .head img { width: 44px; height: 44px; border-radius: 50%; background: #000; object-fit: cover; }
-        .launch-card .head .t { font-weight: 800; font-size: 1.05rem; }
-        .launch-card .head .s { color: var(--muted); font-size: 0.85rem; }
-        .launch-card .stats { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 0.6rem 0; }
-        .launch-card .stats .k { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        .launch-card .stats .v { font-weight: 800; }
-        .pools-table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
-        .pools-table th { color: var(--muted); text-align: left; font-weight: 700; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--line); }
-        .pools-table td { padding: 0.35rem 0.4rem; border-bottom: 1px dashed var(--line); }
-        .muted { color: var(--muted); }
-        .spin { display: inline-block; animation: spin 1s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .hidden { display: none !important; }
-        .foot { color: var(--muted); font-size: 0.8rem; margin-top: 2rem; text-align: center; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FireFun</title>
+<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+<style>
+@font-face{font-family:"Unbounded";src:url(vendor/fonts/unbounded-latin.woff2) format("woff2");font-weight:200 900;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Unbounded";src:url(vendor/fonts/unbounded-latin-ext.woff2) format("woff2");font-weight:200 900;font-display:swap;unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:"JetBrains Mono";src:url(vendor/fonts/jetbrainsmono-400.woff2) format("woff2");font-weight:400}
+@font-face{font-family:"JetBrains Mono";src:url(vendor/fonts/jetbrainsmono-500.woff2) format("woff2");font-weight:500}
+@font-face{font-family:"JetBrains Mono";src:url(vendor/fonts/jetbrainsmono-700.woff2) format("woff2");font-weight:700}
+
+:root{--bg:#0b0c10;--card:#12141b;--card-2:#171a22;--well:#0f1116;--line:#2a2f3d;--line-2:#1c1f2a;--text:#e8eaf0;--muted:#9aa1b3;--dim:#5b6275;--gold:#ffd166;--flame:#ff7a3d;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24;--ok-line:#1e4d31;--ok-bg:#10261a;--ok-fg:#b6f5cc;--bad-line:#5a2323;--bad-bg:#2a1414;--bad-fg:#ffb4b4;--warn-line:#5a4a12;--warn-bg:#2a2208;--warn-fg:#ffe1a0;--grad:linear-gradient(135deg,#ffd166,#ff7a3d)}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}a:hover{color:#ffe1a0}
+input,select,textarea,button{font-family:inherit;color:inherit}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold)!important;box-shadow:0 0 0 3px rgba(255,209,102,.18)}
+input::placeholder,textarea::placeholder{color:var(--dim)}
+input[type=number]{-moz-appearance:textfield}input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+button{cursor:pointer;transition:transform .08s ease,filter .15s ease}button:active:not(:disabled){transform:scale(.97)}button:disabled{cursor:not-allowed}
+details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
+.hidden{display:none!important}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes pop{0%{transform:scale(.92);opacity:0}100%{transform:scale(1);opacity:1}}
+@keyframes flame{0%,100%{filter:drop-shadow(0 0 6px rgba(255,122,61,.55))}50%{filter:drop-shadow(0 0 14px rgba(255,209,102,.85))}}
+@keyframes shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+.pop{animation:pop .3s ease both}
+
+.u{font-family:Unbounded,sans-serif}
+.mono{font-family:"JetBrains Mono",monospace}
+.k{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.k.sm{font-size:9px;letter-spacing:.08em}
+.pill{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.ok{border-color:var(--ok-line);color:var(--ok)}
+.pill.bad{border-color:var(--bad-line);color:var(--bad)}
+.pill.warn{border-color:var(--warn-line);color:var(--warn)}
+.pill.gold{border-color:rgba(255,209,102,.35);color:var(--gold)}
+
+.page{min-height:100vh;background:radial-gradient(900px 400px at 50% -120px,rgba(255,122,61,.22),transparent 70%),var(--bg);padding-bottom:110px}
+.topbar{position:sticky;top:0;z-index:30;backdrop-filter:blur(14px);background:rgba(11,12,16,.78);border-bottom:1px solid var(--line-2)}
+.topbar .in{max-width:640px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:10px}
+.brand{display:flex;align-items:center;gap:8px;font-family:Unbounded,sans-serif;font-weight:900;font-size:17px;letter-spacing:-.01em}
+.brand i{color:var(--flame);animation:flame 2.2s ease-in-out infinite}
+.badges{display:flex;gap:6px;margin-left:2px}
+.tabs{margin-left:auto;display:flex;background:#141720;border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+.tab{border:0;border-radius:999px;padding:7px 14px;font-weight:800;font-size:13px;min-height:32px;background:transparent;color:var(--muted)}
+.tab.is-active{background:var(--gold);color:#111}
+
+.screen{max-width:640px;margin:0 auto;padding:22px 14px 0;display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.hero{padding:6px 4px 2px}
+.hero h1{margin:0;font-family:Unbounded,sans-serif;font-weight:900;font-size:clamp(30px,8vw,44px);line-height:1;letter-spacing:-.03em;text-wrap:balance}
+.hero h1 .shine{background:linear-gradient(90deg,#ffd166,#ff7a3d,#ffd166);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shimmer 3s linear infinite}
+.hero p{margin:12px 0 0;color:var(--muted);font-size:15px;text-wrap:pretty}
+.hero p b{color:var(--text);font-weight:600}
+.chips{display:flex;gap:6px;margin-top:14px;flex-wrap:wrap}
+.chip{font-family:"JetBrains Mono",monospace;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-radius:999px;background:var(--card-2);border:1px solid var(--line);color:var(--muted)}
+.chip i{margin-right:5px}.chip.gold{color:var(--gold)}.chip.ok{color:var(--ok)}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:18px 16px;transition:border-color .2s ease,opacity .3s ease}
+.card.hot{background:linear-gradient(180deg,#171a22,#12141b);box-shadow:0 20px 60px -30px rgba(255,122,61,.35)}
+.card.ok{border-color:var(--ok-line)}
+.card.ready{border-color:rgba(255,209,102,.5)}
+.card.dimmed{opacity:.55}
+.card-h{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.card-h h2{margin:0;font-family:Unbounded,sans-serif;font-weight:700;font-size:16px}
+.card-h .right{margin-left:auto}
+.step{width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;background:#1f2330;color:var(--text);flex:0 0 auto}
+.step.active{background:var(--gold);color:#111}
+.step.done{background:var(--ok-line);color:var(--ok)}
+.hint{margin:0 0 12px;color:var(--muted);font-size:13px;text-wrap:pretty}
+.hint b{color:var(--text);font-weight:800}
+.hint code{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--gold);background:var(--card-2);padding:1px 5px;border-radius:6px}
+.tiny{margin:10px 0 0;color:var(--dim);font-size:12.5px}
+
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.mcap-in{display:flex;align-items:baseline;gap:6px;margin-top:6px}
+.mcap-in .sym{font-family:Unbounded,sans-serif;font-weight:700;font-size:30px;color:var(--gold)}
+.mcap-in input{flex:1;min-width:0;background:transparent;border:0;border-bottom:2px solid var(--line);border-radius:0;font-family:Unbounded,sans-serif;font-weight:900;font-size:clamp(34px,10vw,52px);line-height:1.1;padding:0 0 4px;color:var(--text);letter-spacing:-.02em}
+.mcap-in input:focus{box-shadow:none}
+.presets{display:flex;gap:6px;margin-top:14px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.presets::-webkit-scrollbar{display:none}
+.preset{flex:0 0 auto;min-height:36px;padding:0 14px;border-radius:999px;font-weight:800;font-size:13px;border:1px solid var(--line);background:var(--well);color:var(--text)}
+.preset.is-active{background:var(--gold);color:#111;border-color:var(--gold)}
+.stats{display:grid;gap:10px;margin-top:14px}
+.stats.c2{grid-template-columns:1fr 1fr}
+.stats.c3{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:12px}
+.stats.c4{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.stat{background:var(--well);border:1px solid var(--line-2);border-radius:14px;padding:10px 12px}
+.stat .v{font-family:Unbounded,sans-serif;font-weight:700;font-size:17px;margin-top:3px;overflow-wrap:anywhere}
+.stats.c4 .stat,.stats.c3 .stat{border-radius:12px;padding:8px 10px}
+.stats.c4 .stat .v,.stats.c3 .stat .v{font-size:15px;margin-top:2px}
+.stat .v.gold{color:var(--gold)}
+.stats.c3 .stat .v{font-family:inherit;font-weight:800;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.g2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:10px}
+.g2e{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:10px}
+.lbl{display:grid;gap:5px}
+.lbl.mt{margin-top:10px}
+.in{width:100%;box-sizing:border-box;min-height:46px;background:var(--well);border:1px solid var(--line);border-radius:12px;padding:0 12px;font-size:16px;font-weight:600}
+.in.sym{font-weight:800;text-transform:uppercase;font-family:"JetBrains Mono",monospace}
+.in.num{font-size:15px;font-family:"JetBrains Mono",monospace;font-weight:500}
+.in.mono{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:500;min-height:44px}
+textarea.in{padding:10px 12px;font-size:15px;resize:vertical;min-height:0;font-weight:500}
+.in:disabled{opacity:.6}
+.file{position:relative;display:flex;align-items:center;gap:8px;min-height:46px;background:var(--well);border:1px dashed var(--line);border-radius:12px;padding:0 12px;color:var(--muted);font-size:13px;overflow:hidden}
+.file i{color:var(--gold)}.file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.msg{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card-2);color:var(--muted);font-size:13px}
+.msg.ok{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok-fg)}
+.msg.bad{border-color:var(--bad-line);background:var(--bad-bg);color:var(--bad-fg)}
+.msg.warn{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn-fg)}
+.msg strong{font-family:Unbounded,sans-serif}
+.msg .m{color:var(--muted)}
+.btn{min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--card-2);color:var(--gold);font-weight:800;font-size:14px}
+.btn.sm{min-height:40px;padding:0 12px;font-size:12.5px;color:var(--muted);background:transparent}
+.btn.grad{border:0;background:var(--grad);color:#111;font-family:Unbounded,sans-serif;font-weight:900}
+.btn.grad:disabled{background:#1f2330;color:var(--dim)}
+.addrow{display:flex;gap:8px;margin-top:10px}
+.addrow input{flex:1;min-width:0}
+
+.qrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 10px 10px 12px;border-radius:16px;border:1px solid var(--line);background:var(--card-2);transition:all .15s ease}
+.qrow.off{opacity:.55;background:var(--well);border-color:var(--line-2)}
+.qlist{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+.sw{width:44px;height:26px;border-radius:999px;border:0;position:relative;background:var(--line);flex:0 0 auto}
+.sw.on{background:var(--gold)}.sw.on.forced{background:#b8952f;cursor:not-allowed}
+.sw .knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s ease;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.sw.on .knob{left:21px}
+.qname{display:flex;align-items:center;gap:8px;font-weight:800;font-size:15px;min-width:0}
+.dot{width:22px;height:22px;border-radius:50%;flex:0 0 auto;background:var(--line);object-fit:cover}
+.qmeta{color:var(--muted);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qmeta a{font-family:"JetBrains Mono",monospace;font-size:11px}
+.req{font-family:"JetBrains Mono",monospace;font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);border:1px solid rgba(255,209,102,.35);border-radius:999px;padding:1px 6px;white-space:nowrap}
+.req i{font-size:8px;margin-right:3px}
+.pct{display:flex;align-items:center;background:var(--well);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.pct input{width:58px;min-height:40px;border:0;background:transparent;text-align:right;font-family:"JetBrains Mono",monospace;font-weight:700;font-size:14px;padding:0 4px 0 8px}
+.pct input:focus{box-shadow:none}
+.pct span{padding-right:8px;color:var(--muted);font-size:12px}
+.qx{width:32px;height:40px;border:0;background:transparent;color:var(--muted)}
+.qright{display:flex;align-items:center;gap:6px}
+.preview{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:12px}
+.prow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:8px 12px;border-radius:12px;background:var(--well);border:1px solid var(--line-2);font-size:12.5px}
+.prow .n{font-weight:800}.prow .n span{color:var(--muted);font-weight:500}
+.prow .r{font-family:"JetBrains Mono",monospace;color:var(--muted);text-align:right}
+.prow .r.gold{color:var(--gold)}
+.prow .d{color:var(--muted)}
+details.adv{margin-top:12px;border-top:1px solid var(--line-2);padding-top:10px}
+details.adv summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;min-height:36px}
+details.adv summary i.chev{margin-left:auto;font-size:11px}
+details.adv .body{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:8px}
+select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
+.note{color:var(--dim);font-size:12px}
+.note.mono{font-family:"JetBrains Mono",monospace}
+.cfglist{display:grid;gap:6px;max-height:16rem;overflow:auto}
+.cfgbtn{text-align:left;min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--well);font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfgbtn span{color:var(--muted)}
+
+.or{display:flex;align-items:center;gap:10px;margin:12px 0 8px;color:var(--dim);font-size:12px}
+.or span{flex:1;height:1px;background:var(--line-2)}
+.wgrid{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+.wcol{min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+.addr{display:flex;align-items:center;gap:6px;background:var(--well);border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.addr .t{flex:1;min-width:0;font-family:"JetBrains Mono",monospace;font-size:12px;overflow-wrap:anywhere;line-height:1.4}
+.addr .t.dim{color:var(--muted)}.addr .t.lit{color:var(--warn-fg)}
+.ib{width:36px;height:36px;border-radius:10px;border:0;background:var(--card-2);color:var(--muted);flex:0 0 auto}
+.ib.ok{color:var(--ok)}
+.chk{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:var(--well);cursor:pointer;font-weight:700;font-size:14px;user-select:none}
+.chk .box{width:22px;height:22px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;border:2px solid var(--line);background:transparent;color:#111;font-size:12px}
+.chk .box i{opacity:0}
+.chk.on{border-color:var(--ok-line);background:var(--ok-bg)}
+.chk.on .box{border-color:var(--ok);background:var(--ok)}.chk.on .box i{opacity:1}
+.qr{background:#fff;padding:6px;border-radius:12px;width:132px;height:132px;box-sizing:border-box;flex:0 0 auto}
+.qr img{width:100%;height:100%;display:block}
+.fund{margin-top:14px;border-top:1px solid var(--line-2);padding-top:14px}
+.fund .big{display:flex;align-items:baseline;gap:8px;margin-top:6px}
+.fund .big .n{font-family:Unbounded,sans-serif;font-weight:900;font-size:28px;color:var(--gold)}
+.fund .big .n.ok{color:var(--ok)}
+.fund .big .d{color:var(--muted);font-size:13px}
+.fund .lab{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--gold)}.fund .lab.ok{color:var(--ok)}
+.bar{height:8px;border-radius:999px;background:var(--well);border:1px solid var(--line-2);margin-top:8px;overflow:hidden}
+.bar div{height:100%;border-radius:999px;background:linear-gradient(90deg,#ffd166,#ff7a3d);width:0;transition:width .4s ease}
+.fund p{margin:8px 0 0;color:var(--dim);font-size:12px}.fund p strong{color:var(--text)}
+
+.gates{display:grid;gap:6px;margin-bottom:12px}
+.gate{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
+.gate i{width:16px;text-align:center}
+.gate.ok{color:var(--ok)}
+.launch-btn{width:100%;min-height:58px;border:0;border-radius:16px;font-family:Unbounded,sans-serif;font-weight:900;font-size:18px;letter-spacing:-.01em;background:#1f2330;color:var(--dim);box-shadow:none;transition:all .2s ease}
+.launch-btn i{margin-right:10px}
+.launch-btn.ready{background:var(--grad);color:#111;box-shadow:0 16px 40px -14px rgba(255,140,60,.8)}
+.launch-btn.done{background:var(--ok-bg);color:var(--ok)}
+.prog{margin-top:14px;display:grid;grid-template-columns:minmax(0,1fr)}
+.prog:empty{margin:0}
+.pr{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--line-2);font-size:14px;color:var(--text)}
+.pr.sub{padding-left:22px;font-size:12.5px;color:var(--muted)}
+.pr .st{text-align:center;color:#3a4152}
+.pr .st.running{color:var(--gold)}.pr .st.running i{display:inline-block;animation:spin 1s linear infinite}
+.pr .st.done{color:var(--ok)}.pr .st.failed{color:var(--bad)}
+.pr .lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr .ex{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--gold)}
+.results{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:12px}
+.res{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;padding:9px 12px;border-radius:12px;background:var(--well);border:1px solid var(--ok-line);font-size:12.5px}
+.res .n{font-weight:800}.res .n span{color:var(--muted);font-weight:500}
+.res .lk{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ok);text-align:right}
+.res .lk.bad{color:var(--bad)}
+.res .links{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--muted)}
+.res .tx{font-family:"JetBrains Mono",monospace;font-size:11px;text-align:right}
+.sendrow{display:flex;gap:8px}
+.sendrow input{flex:1;min-width:0;min-height:48px}
+.sendrow .btn{min-height:48px;padding:0 18px;border-radius:12px}
+.foot{color:var(--dim);font-size:11.5px;margin:10px 0 0;text-align:center;font-family:"JetBrains Mono",monospace;overflow-wrap:anywhere}
+
+.xhead{display:flex;align-items:flex-end;gap:10px;padding:6px 4px 2px}
+.xhead h1{margin:0;font-family:Unbounded,sans-serif;font-weight:900;font-size:clamp(28px,7vw,38px);line-height:1;letter-spacing:-.03em}
+.xhead p{margin:8px 0 0;color:var(--muted);font-size:13px}
+.xhead .btn{margin-left:auto;flex:0 0 auto;min-height:40px;padding:0 14px;border-radius:999px;font-size:13px}
+.xhead .btn i{margin-right:6px}
+.feedstat{padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-size:12.5px;font-family:"JetBrains Mono",monospace}
+.feedstat.bad{border-color:var(--bad-line);color:var(--bad-fg)}
+.lc{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:16px}
+.lc .head{display:flex;gap:12px;align-items:center}
+.lc .avatar{width:48px;height:48px;border-radius:50%;flex:0 0 auto;background:linear-gradient(135deg,#ff7a3d,#ffd166);box-shadow:0 0 0 3px var(--well),0 0 0 4px var(--line);object-fit:cover}
+.lc .t{font-family:Unbounded,sans-serif;font-weight:700;font-size:16px;display:flex;align-items:baseline;gap:8px;min-width:0}
+.lc .t .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc .t .sy{color:var(--muted);font-size:12px;font-family:"JetBrains Mono",monospace}
+.lc .s{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc .s a{font-family:"JetBrains Mono",monospace}
+.lc .mc{text-align:right;flex:0 0 auto}
+.lc .mc .v{font-family:Unbounded,sans-serif;font-weight:900;font-size:18px}
+.lc .mc .v.gold{color:var(--gold)}
+.lc .pools{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:8px}
+.lc .pool{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:8px 12px;border-radius:12px;background:var(--well);border:1px solid var(--line-2);font-size:12.5px}
+.lc .pool .n{font-weight:800}.lc .pool .n span{color:var(--muted);font-weight:500}
+.lc .pool .lk{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ok)}
+.lc .pool .pr2{color:var(--muted);font-family:"JetBrains Mono",monospace;font-size:11px}
+.lc .pool .lnk{text-align:right;font-size:12px}.lc .pool .lnk a.m{color:var(--muted)}
+
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:40;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(11,12,16,0),rgba(11,12,16,.92) 40%)}
+.dock .in{max-width:640px;margin:0 auto;display:flex;align-items:center;gap:10px;background:var(--card-2);border:1px solid var(--line);border-radius:18px;padding:8px 8px 8px 14px;box-shadow:0 20px 50px -20px rgba(0,0,0,.8)}
+.dock .kv{min-width:0;flex:1}
+.dock .v{font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dock .btn{flex:0 0 auto;min-height:44px;padding:0 18px;border:0;border-radius:12px;font-family:Unbounded,sans-serif;font-weight:900;font-size:14px;background:#1f2330;color:var(--muted)}
+.dock .btn.active{background:var(--grad);color:#111}
+</style>
 </head>
 <body>
-    <div class="topbar">
-        <div class="brand"><i class="fas fa-fire" style="color: var(--accent)"></i> FireFun <span>· firefun.xyz</span></div>
-        <span id="rpcBadge" class="badge">rpc</span>
-        <span id="feeBadge" class="badge" title="Config protocol fee (share of swap fees). Must be Orca's 25% maximum.">protocol fee</span>
-        <div class="tabs-row">
-            <button class="tabbtn is-active" data-tab="launch"><i class="fas fa-rocket"></i> Launch</button>
-            <button class="tabbtn" data-tab="explore"><i class="fas fa-compass"></i> Explore</button>
+<div class="page">
+
+  <div class="topbar"><div class="in">
+    <div class="brand"><i class="fas fa-fire"></i>FireFun</div>
+    <div class="badges"><span class="pill" id="rpcBadge">mainnet</span><span class="pill ok">orca</span><span class="pill" id="feeBadge" title="Config protocol fee (share of swap fees). Must be Orca's 25% maximum.">fee ?</span></div>
+    <div class="tabs">
+      <button class="tab is-active" data-tab="launch"><i class="fas fa-rocket" style="margin-right:6px"></i>Launch</button>
+      <button class="tab" data-tab="explore"><i class="fas fa-compass" style="margin-right:6px"></i>Explore</button>
+    </div>
+  </div></div>
+
+  <!-- ============================ LAUNCH ============================ -->
+  <section id="tab-launch" class="screen">
+
+    <div class="hero">
+      <h1>As many quotes<br>as you want.<br><span class="shine">100% of the locked LP. Yours.</span></h1>
+      <p>Pair your meme with SOL, USDC, $TOKEN, anything priced — one Orca pool each, at any market cap. Liquidity is <b>locked forever</b>, and creators keep <b>100% of the locked LP</b> — earning swap fees for life (protocol takes 25% of fees, never your LP). <b id="forcedNames">$TOKEN + $INFITY</b> always ride along (min 1% each).</p>
+      <div class="chips">
+        <span class="chip gold"><i class="fas fa-infinity"></i>unlimited quotes</span>
+        <span class="chip ok"><i class="fas fa-coins"></i>100% locked LP → creator</span>
+        <span class="chip"><i class="fas fa-lock"></i>LP locked forever</span>
+      </div>
+    </div>
+
+    <!-- Market cap -->
+    <div class="card hot">
+      <div class="row"><div class="k">Starting market cap</div><div class="mono" style="font-size:11px;color:var(--dim)">USD · any number works</div></div>
+      <div class="mcap-in"><span class="sym">$</span><input id="tokMcap" type="number" min="1" step="any" value="10000" inputmode="decimal"></div>
+      <div class="presets" id="mcapPresets">
+        <button class="preset" data-mcap="1000">$1k</button><button class="preset" data-mcap="5000">$5k</button><button class="preset is-active" data-mcap="10000">$10k</button><button class="preset" data-mcap="50000">$50k</button><button class="preset" data-mcap="100000">$100k</button><button class="preset" data-mcap="1000000">$1M</button><button class="preset" data-mcap="10000000">$10M</button>
+      </div>
+      <div class="stats c2">
+        <div class="stat"><div class="k">Opens at</div><div class="v" id="impliedPrice">—</div></div>
+        <div class="stat"><div class="k">Per dollar</div><div class="v" id="impliedPerDollar">—</div></div>
+      </div>
+      <p class="tiny">Single-sided positions: only your token goes in, so no quote tokens are needed to open at this price.</p>
+    </div>
+
+    <!-- 1. Token -->
+    <div class="card" id="card-token">
+      <div class="card-h"><span class="step" id="stepToken">1</span><h2>Token</h2><span class="pill ok right hidden" id="tokenState">minted</span></div>
+      <div class="g2">
+        <label class="lbl"><span class="k">Name</span><input id="tokName" class="in" maxlength="32" placeholder="Infinity Cat"></label>
+        <label class="lbl"><span class="k">Symbol</span><input id="tokSymbol" class="in sym" maxlength="10" placeholder="ICAT"></label>
+      </div>
+      <div class="g2e">
+        <label class="lbl"><span class="k">Total supply</span><input id="tokSupply" class="in num" type="number" min="1" step="1" value="1000000000" inputmode="numeric"></label>
+        <label class="lbl"><span class="k">Logo</span><span class="file"><i class="fas fa-image"></i><span id="logoLabel">png / jpg / gif / webp</span><input id="tokLogo" type="file" accept="image/*"></span></label>
+      </div>
+      <label class="lbl mt"><span class="k">Description</span><textarea id="tokDesc" class="in" rows="2" placeholder="one line about the coin"></textarea></label>
+      <div id="tokenCreated" class="msg ok hidden"></div>
+    </div>
+
+    <!-- 2. Quotes -->
+    <div class="card" id="card-pools">
+      <div class="card-h"><span class="step" id="stepQuotes">2</span><h2>Quotes &amp; pools</h2><span class="right mono" style="font-size:11px;color:var(--muted)" id="quotesSummary"></span></div>
+      <p class="hint">Each quote becomes its own pool holding that share of supply. Unallocated supply comes back to you.</p>
+      <div class="qlist" id="quoteRows"></div>
+      <div class="addrow"><input id="customQuote" class="in mono" placeholder="add any quote mint (base58)"><button id="btnAddQuote" class="btn">Add</button></div>
+      <div id="quoteMsg"></div>
+      <div class="stats c4" style="margin-top:14px">
+        <div class="stat"><div class="k sm">Pools</div><div class="v" id="sumPools">—</div></div>
+        <div class="stat"><div class="k sm">In pools</div><div class="v" id="sumPct">—</div></div>
+        <div class="stat"><div class="k sm">To you</div><div class="v" id="sumRem">—</div></div>
+        <div class="stat"><div class="k sm">SOL</div><div class="v gold" id="sumSol">—</div></div>
+      </div>
+      <div class="preview" id="poolPreview"></div>
+      <details class="adv">
+        <summary><i class="fas fa-sliders-h"></i> Fee tier &amp; Whirlpools config <i class="fas fa-chevron-down chev"></i></summary>
+        <div class="body">
+          <label class="lbl"><span class="k">Fee tier (from the config)</span><select id="feeTier" class="in"></select><span class="note" id="feeTierNote"></span></label>
+          <label class="lbl"><span class="k">Config address</span>
+            <div style="display:flex;gap:6px"><input id="configAddr" class="in mono" style="flex:1;min-width:0;font-size:12px"><button id="btnLoadConfig" class="btn" style="padding:0 12px;font-size:13px">Load</button><button id="btnListConfigs" class="btn" style="padding:0 12px;font-size:13px">Ours</button></div>
+            <span class="note mono" id="configNote"></span></label>
+          <div id="configList" class="cfglist hidden"></div>
         </div>
+      </details>
     </div>
 
-    <div class="wrap">
-        <!-- ============================ LAUNCH ============================ -->
-        <section id="tab-launch">
-            <p class="hero-line">
-                <strong>Launch a memecoin at any market cap.</strong> Pick the quote tokens you want to trade
-                against; every pool is an Orca Whirlpool on our config with a fixed fee tier and its liquidity
-                <strong>locked forever</strong> with Orca's native <code>lock_position</code>. Two quotes are
-                always in: <span id="forcedNames" class="mono"></span>, min 1% of supply each.
-            </p>
-
-            <!-- 1. Wallet -->
-            <div class="card-x" id="card-wallet">
-                <h2><span class="num">1</span> Launch wallet <span id="walletState" class="badge hidden"></span></h2>
-                <p class="hint">A fresh throwaway wallet does the whole launch. Fund it, launch, then everything
-                    (locked positions, leftover tokens, SOL) is handed to your real wallet at the end.</p>
-                <div id="walletEmpty" style="margin-top: 0.75rem;">
-                    <button id="btnGenWallet" class="button is-primary"><i class="fas fa-wallet"></i>&nbsp; Generate launch wallet</button>
-                    <span class="muted" style="margin: 0 0.6rem;">or</span>
-                    <input id="existingWallet" class="input mono" style="width: 26rem; max-width: 100%; display: inline-block;" placeholder="resume a saved launch wallet (public key)">
-                    <button id="btnUseWallet" class="button is-ghost">Use</button>
-                </div>
-                <div id="walletInfo" class="hidden" style="margin-top: 0.75rem;">
-                    <div class="grid2">
-                        <div>
-                            <div class="label">Address</div>
-                            <div class="addr mono"><span id="walletAddr"></span><button data-copy="#walletAddr" title="copy"><i class="far fa-copy"></i></button></div>
-                            <div class="label" style="margin-top: 0.75rem;">Secret key (base58)</div>
-                            <div class="msg warn">Save this now. It is stored on this machine's recovery list too, but the key is the only way to rescue funds if something dies mid-launch.</div>
-                            <div class="addr mono" style="margin-top: 0.4rem; max-width: 100%; word-break: break-all;"><span id="walletSecret">••••••••••••••••••••••••</span><button id="btnRevealSecret" title="reveal"><i class="far fa-eye"></i></button><button data-copy="#walletSecret" title="copy"><i class="far fa-copy"></i></button></div>
-                            <label style="display: block; margin-top: 0.6rem;"><input type="checkbox" id="savedSecret"> I saved the secret key</label>
-                        </div>
-                        <div><img id="walletQr" class="qr" alt="wallet QR"></div>
-                    </div>
-                    <button id="btnForgetWallet" class="button is-ghost is-small" style="margin-top: 0.5rem;">Start over with a different wallet</button>
-                </div>
+    <!-- 3. Wallet -->
+    <div class="card" id="card-wallet">
+      <div class="card-h"><span class="step" id="stepWallet">3</span><h2>Launch wallet</h2><span class="pill ok right hidden mono" id="walletState"></span></div>
+      <p class="hint">A throwaway wallet does the whole launch. Fund it, launch, and everything is handed to your real wallet at the end.</p>
+      <div id="walletEmpty">
+        <button id="btnGenWallet" class="btn grad" style="width:100%;min-height:52px;border-radius:14px;font-size:16px;box-shadow:0 10px 30px -12px rgba(255,160,80,.6)"><i class="fas fa-wallet" style="margin-right:8px"></i>Generate launch wallet</button>
+        <div class="or"><span></span>or resume<span></span></div>
+        <div class="sendrow"><input id="existingWallet" class="in mono" placeholder="saved launch wallet (public key)"><button id="btnUseWallet" class="btn">Use</button></div>
+      </div>
+      <div id="walletInfo" class="hidden">
+        <div class="wgrid">
+          <div class="wcol">
+            <div class="k">Address</div>
+            <div class="addr"><span class="t" id="walletAddr"></span><button class="ib" data-copy="#walletAddr" title="copy"><i class="far fa-copy"></i></button></div>
+            <div id="secretBlock">
+              <div class="k" style="margin-top:2px">Secret key (base58)</div>
+              <div class="msg warn" style="margin-top:8px;padding:8px 10px;font-size:12.5px">Save this now. It's also on this machine's recovery list, but the key is the only way to rescue funds if something dies mid-launch.</div>
+              <div class="addr" style="margin-top:8px"><span class="t dim" id="walletSecret">••••••••••••••••••••••••••••••••</span><button class="ib" id="btnRevealSecret" title="reveal"><i class="far fa-eye"></i></button><button class="ib" data-copy="#walletSecret" title="copy"><i class="far fa-copy"></i></button></div>
             </div>
-
-            <!-- 2. Token -->
-            <div class="card-x" id="card-token">
-                <h2><span class="num">2</span> Token <span id="tokenState" class="badge hidden"></span></h2>
-                <div class="grid3">
-                    <div><div class="label">Name</div><input id="tokName" class="input" maxlength="32" placeholder="Infinity Cat"></div>
-                    <div><div class="label">Symbol</div><input id="tokSymbol" class="input" maxlength="10" placeholder="ICAT"></div>
-                    <div><div class="label">Total supply</div><input id="tokSupply" class="input" type="number" min="1" step="1" value="1000000000"></div>
-                </div>
-                <div class="grid2" style="margin-top: 0.75rem;">
-                    <div><div class="label">Description</div><textarea id="tokDesc" class="textarea" rows="2" placeholder="one line about the coin"></textarea></div>
-                    <div><div class="label">Logo (png / jpg / gif / webp)</div><input id="tokLogo" type="file" accept="image/*" class="input" style="padding: 0.3rem;"></div>
-                </div>
-                <div style="margin-top: 0.9rem;">
-                    <div class="label">Starting market cap (USD) — any number works</div>
-                    <input id="tokMcap" class="input" type="number" min="1" step="any" value="10000" style="max-width: 18rem;">
-                    <div class="mcap-presets" id="mcapPresets">
-                        <button data-mcap="1000">$1k</button>
-                        <button data-mcap="5000">$5k</button>
-                        <button data-mcap="10000" class="is-active">$10k</button>
-                        <button data-mcap="50000">$50k</button>
-                        <button data-mcap="100000">$100k</button>
-                        <button data-mcap="1000000">$1M</button>
-                        <button data-mcap="10000000">$10M</button>
-                    </div>
-                    <div class="implied" id="impliedPrice"></div>
-                    <p class="hint" style="margin-top: 0.4rem;">Positions are single-sided (only your token goes in), so the pool can open at
-                        whatever price you choose — no quote tokens are needed to seed it.</p>
-                </div>
-                <div id="tokenCreated" class="hidden msg ok" style="margin-top: 0.75rem;"></div>
-            </div>
-
-            <!-- 3. Pools -->
-            <div class="card-x" id="card-pools">
-                <h2><span class="num">3</span> Quotes &amp; pools</h2>
-                <p class="hint">Each quote becomes its own Orca pool holding the given share of the supply. Whatever you don't
-                    allocate is sent to your wallet at the end.</p>
-                <div id="quoteRows" style="margin-top: 0.75rem;"></div>
-                <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.4rem;">
-                    <input id="customQuote" class="input mono" style="max-width: 30rem;" placeholder="add any other quote mint (base58)">
-                    <button id="btnAddQuote" class="button is-ghost">Add</button>
-                </div>
-                <div id="quoteMsg"></div>
-                <div class="grid2" style="margin-top: 0.9rem;">
-                    <div>
-                        <div class="label">Fee tier (from the config)</div>
-                        <div class="select is-fullwidth"><select id="feeTier"></select></div>
-                        <div class="hint" id="feeTierNote"></div>
-                    </div>
-                    <div>
-                        <div class="label">Estimated cost</div>
-                        <div class="summary" style="margin-top: 0.2rem;">
-                            <div><div class="k">Pools</div><div class="v" id="sumPools">—</div></div>
-                            <div><div class="k">Supply in pools</div><div class="v" id="sumPct">—</div></div>
-                            <div><div class="k">Back to you</div><div class="v" id="sumRem">—</div></div>
-                            <div><div class="k">SOL needed</div><div class="v" id="sumSol">—</div></div>
-                        </div>
-                    </div>
-                </div>
-                <details class="adv">
-                    <summary>Advanced: Whirlpools config</summary>
-                    <div style="margin-top: 0.5rem;">
-                        <div class="label">Config address</div>
-                        <div style="display: flex; gap: 0.5rem;">
-                            <input id="configAddr" class="input mono" style="max-width: 32rem;">
-                            <button id="btnLoadConfig" class="button is-ghost">Load</button>
-                            <button id="btnListConfigs" class="button is-ghost">List ours</button>
-                        </div>
-                        <div class="hint" id="configNote"></div>
-                        <div id="configList" class="hidden" style="margin-top: 0.5rem; max-height: 14rem; overflow: auto;"></div>
-                    </div>
-                </details>
-                <div id="poolPreview" style="margin-top: 0.9rem;"></div>
-            </div>
-
-            <!-- 4. Fund -->
-            <div class="card-x" id="card-fund">
-                <h2><span class="num">4</span> Fund the launch wallet <span id="fundState" class="badge hidden"></span></h2>
-                <div class="grid2">
-                    <div>
-                        <div class="kv">
-                            <div class="k">Send at least</div><div><strong id="fundNeed">—</strong> SOL</div>
-                            <div class="k">Balance</div><div><strong id="fundBal">—</strong> SOL</div>
-                            <div class="k">To</div><div class="addr mono"><span id="fundAddr">—</span><button data-copy="#fundAddr" title="copy"><i class="far fa-copy"></i></button></div>
-                        </div>
-                    </div>
-                    <div><img id="fundQr" class="qr hidden" alt="wallet QR"></div>
-                </div>
-            </div>
-
-            <!-- 5. Launch -->
-            <div class="card-x" id="card-launch">
-                <h2><span class="num">5</span> Launch <span id="launchState" class="badge hidden"></span></h2>
-                <p class="hint">Mints the token (authorities renounced), creates every pool at your starting market cap,
-                    deposits each share single-sided, and permanently locks each position. Progress is journaled; if
-                    anything dies, come back with the same wallet and press Launch again — finished pools are skipped. Every transaction is real: there is no demo for this page.</p>
-                <div style="margin-top: 0.6rem;">
-                    <button id="btnLaunch" class="button is-primary is-medium" disabled><i class="fas fa-rocket"></i>&nbsp; Launch</button>
-                </div>
-                <ul id="launchProg" class="prog"></ul>
-                <div id="launchMsg"></div>
-                <div id="launchResults" class="hidden" style="margin-top: 0.75rem;"></div>
-            </div>
-
-            <!-- 6. Finish -->
-            <div class="card-x" id="card-finish">
-                <h2><span class="num">6</span> Send everything to your wallet <span id="finishState" class="badge hidden"></span></h2>
-                <p class="hint">Locked positions still earn fees. They move to your wallet with Orca's
-                    <code>transfer_locked_position</code>, then the un-pooled tokens and leftover SOL are swept.</p>
-                <div style="display: flex; gap: 0.5rem; margin-top: 0.6rem; flex-wrap: wrap;">
-                    <input id="destWallet" class="input mono" style="max-width: 32rem;" placeholder="your wallet address">
-                    <button id="btnFinish" class="button is-primary" disabled><i class="fas fa-paper-plane"></i>&nbsp; Send</button>
-                </div>
-                <ul id="finishProg" class="prog"></ul>
-                <div id="finishMsg"></div>
-                <div id="finishResults" class="hidden" style="margin-top: 0.75rem;"></div>
-            </div>
-        </section>
-
-        <!-- ============================ EXPLORE ============================ -->
-        <section id="tab-explore" class="hidden">
-            <p class="hero-line">
-                <strong>Launches on our config.</strong> Every token whose Orca pools were permanently locked on
-                <span id="exploreConfig" class="mono"></span> since <span id="exploreSince"></span>.
-                <button id="btnRefreshFeed" class="button is-ghost is-small" style="margin-left: 0.5rem;"><i class="fas fa-sync"></i>&nbsp; Refresh</button>
-            </p>
-            <div id="feedMsg"></div>
-            <div id="feed" class="feed"></div>
-        </section>
-
-        <p class="foot">Orca Whirlpools program <span class="mono">whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc</span> · locks are permanent · no fees taken by this app.</p>
+            <div id="noSecret" class="note mono hidden">secret stored on this machine (recovery list) — not shown again</div>
+            <label class="chk" id="savedSecret"><span class="box"><i class="fas fa-check"></i></span>I saved the secret key</label>
+          </div>
+          <div class="qr"><img id="walletQr" alt="wallet QR"></div>
+        </div>
+        <div class="fund">
+          <div class="row" style="align-items:baseline"><div class="k">Fund it</div><div class="lab" id="fundLabel">waiting for SOL</div></div>
+          <div class="big"><span class="n" id="fundBal">0.000</span><span class="d">/ <span id="fundNeed">—</span> SOL</span></div>
+          <div class="bar"><div id="fundBar"></div></div>
+          <p>Send at least <strong id="fundNeed2">—</strong> SOL to the address above (scan the QR). Balance refreshes every 6s.</p>
+        </div>
+        <button id="btnForgetWallet" class="btn sm" style="margin-top:12px">Start over with a different wallet</button>
+      </div>
     </div>
 
-    <script src="api.js"></script>
-    <script src="orca.js"></script>
+    <!-- 4. Launch -->
+    <div class="card" id="card-launch">
+      <div class="card-h"><span class="step" id="stepLaunch">4</span><h2>Launch</h2><span class="pill right hidden" id="launchState"></span></div>
+      <p class="hint"><b>One approval, every transaction.</b> Mints the token (authorities renounced), opens every pool at your market cap, deposits single-sided, locks each position permanently. Journaled — if anything dies, press Launch again with the same wallet; finished pools are skipped. <b style="font-weight:600">Every transaction is real.</b></p>
+      <div class="gates" id="gates"></div>
+      <button id="btnLaunch" class="launch-btn" disabled><i class="fas fa-rocket"></i><span id="btnLaunchLabel">Launch</span></button>
+      <div id="launchProg" class="prog"></div>
+      <div id="launchMsg"></div>
+      <div id="launchResults" class="results hidden"></div>
+    </div>
+
+    <!-- 5. Finish -->
+    <div class="card dimmed" id="card-finish">
+      <div class="card-h"><span class="step" id="stepFinish">5</span><h2>Send everything to your wallet</h2><span class="pill right hidden" id="finishState"></span></div>
+      <p class="hint">Locked positions keep earning fees. They move to you with <code>transfer_locked_position</code>, then un-pooled tokens and leftover SOL are swept.</p>
+      <div class="sendrow"><input id="destWallet" class="in mono" placeholder="your wallet address"><button id="btnFinish" class="btn grad" disabled><i class="fas fa-paper-plane" style="margin-right:8px"></i>Send</button></div>
+      <div id="finishProg" class="prog"></div>
+      <div id="finishMsg"></div>
+      <div id="finishResults" class="hidden"></div>
+    </div>
+
+    <p class="foot">Orca Whirlpools · whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc · locks are permanent · no fees taken by this app.</p>
+  </section>
+
+  <!-- ============================ EXPLORE ============================ -->
+  <section id="tab-explore" class="screen hidden">
+    <div class="xhead">
+      <div style="min-width:0"><h1>Launches</h1><p>Every token locked on <a id="exploreConfig" class="mono" style="font-size:12px" target="_blank" rel="noopener" href="#"></a> since <span id="exploreSince"></span>.</p></div>
+      <button id="btnRefreshFeed" class="btn"><i class="fas fa-sync" id="feedSpin"></i>Refresh</button>
+    </div>
+    <div id="feedMsg" class="feedstat">scanning the config…</div>
+    <div id="feed" style="display:grid;gap:14px"></div>
+  </section>
+
+  <!-- Dock -->
+  <div class="dock hidden" id="dock"><div class="in">
+    <div class="kv"><div class="k" id="dockK"></div><div class="v" id="dockV"></div></div>
+    <button class="btn" id="dockBtn"></button>
+  </div></div>
+</div>
+
+<script src="api.js"></script>
+<script src="orca.js"></script>
 </body>
 </html>

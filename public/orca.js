@@ -1,8 +1,8 @@
 // public/orca.js
 //
-// The Orca launch page. Plain browser JS (no bundler); talks to the
-// /api/orca/* routes plus the existing wallet / token / balance endpoints.
-// api.js (loaded first) attaches the session header to every /api call.
+// The FireFun launch page. Plain browser JS (no bundler); talks to the
+// /api/orca/* routes plus the wallet / token / balance endpoints. api.js
+// (loaded first) attaches the session header to every /api call.
 //
 // State survives reloads in localStorage so a launch interrupted mid-way can
 // be resumed with the same wallet: /api/orca/launch skips pools, positions
@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  const STORE_KEY = 'trebuchet.orca.v1';
+  const STORE_KEY = 'firefun.launch.v1';
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -24,14 +24,18 @@
     wallet: null,          // { publicKey, secretKeyB58, qrCode }
     savedSecret: false,
     token: null,           // { mint, name, symbol, totalSupply, decimals, imageUri }
-    quotes: {},            // mint -> { on, pct, info }
-    customQuotes: [],      // [mint]
+    quotes: {},            // mint -> { on, pct, info, forced, custom }
+    customQuotes: [],
     tickSpacing: null,
     config: null,
+    estimate: null,
     launch: null,          // { results, plan, feeRate, tickSpacing }
+    launching: false,
+    finishing: false,
     finish: null,
     destWallet: '',
   };
+  let lastBalance = null;
 
   function persist() {
     try {
@@ -59,8 +63,7 @@
   function restore() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
+      return raw ? JSON.parse(raw) : null;
     } catch (_) { return null; }
   }
 
@@ -106,25 +109,32 @@
   function short(s, n = 4) { return s ? `${s.slice(0, n)}…${s.slice(-n)}` : ''; }
   function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function isPubkey(s) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(s || '').trim()); }
-  function txLink(sig) { return sig ? `<a class="lnk mono" target="_blank" rel="noopener" href="https://solscan.io/tx/${esc(sig)}">${short(sig, 5)}</a>` : ''; }
+  function txLink(sig, n = 5) { return sig ? `<a class="mono" target="_blank" rel="noopener" href="https://solscan.io/tx/${esc(sig)}">${short(sig, n)}</a>` : ''; }
   function acctLink(pk, label) { return pk ? `<a class="mono" target="_blank" rel="noopener" href="https://solscan.io/account/${esc(pk)}">${esc(label || short(pk))}</a>` : ''; }
-  function setMsg(sel, text, kind) {
-    const el = $(sel);
-    el.innerHTML = text ? `<div class="msg ${kind || ''}">${text}</div>` : '';
+  function ago(unix) {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - unix));
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    if (s < 172800) return 'yesterday';
+    return `${Math.floor(s / 86400)}d ago`;
   }
-  function setBadge(sel, text, kind) {
+  function setMsg(sel, text, kind) {
+    $(sel).innerHTML = text ? `<div class="msg ${kind || ''}">${text}</div>` : '';
+  }
+  function setPill(sel, text, kind) {
     const el = $(sel);
     if (!text) { el.classList.add('hidden'); return; }
     el.textContent = text;
-    el.className = `badge ${kind || ''}`;
+    el.className = `pill right ${kind || ''}`;
+  }
+  function setStep(sel, status, n) {
+    const el = $(sel);
+    el.className = `step ${status}`;
+    el.textContent = status === 'done' ? '✓' : String(n);
   }
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-  // Signer fields for launch-wallet requests: the server resolves the key
-  // from its pending-wallet (recovery) store by public key.
-  function signerFields() {
-    return { walletPublicKey: state.wallet.publicKey };
-  }
+  function signerFields() { return { walletPublicKey: state.wallet.publicKey }; }
 
   document.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-copy]');
@@ -132,8 +142,8 @@
     const el = $(b.getAttribute('data-copy'));
     const text = el?.dataset.full || el?.textContent || '';
     navigator.clipboard?.writeText(text).then(() => {
-      b.innerHTML = '<i class="fas fa-check"></i>';
-      setTimeout(() => { b.innerHTML = '<i class="far fa-copy"></i>'; }, 1200);
+      b.innerHTML = '<i class="fas fa-check"></i>'; b.classList.add('ok');
+      setTimeout(() => { b.innerHTML = '<i class="far fa-copy"></i>'; b.classList.remove('ok'); }, 1200);
     });
   });
 
@@ -141,13 +151,15 @@
   // Tabs
   // ---------------------------------------------------------------------
 
-  $$('.tabbtn[data-tab]').forEach((btn) => {
+  let tab = 'launch';
+  $$('.tab[data-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      $$('.tabbtn[data-tab]').forEach((b) => b.classList.toggle('is-active', b === btn));
-      const tab = btn.getAttribute('data-tab');
+      tab = btn.getAttribute('data-tab');
+      $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b === btn));
       $('#tab-launch').classList.toggle('hidden', tab !== 'launch');
       $('#tab-explore').classList.toggle('hidden', tab !== 'explore');
       if (tab === 'explore') loadFeed();
+      renderDock();
     });
   });
 
@@ -161,20 +173,21 @@
     state.meta = meta;
     state.config = meta.config?.address || meta.defaultConfig;
     const pf = meta.config?.defaultProtocolFeeRate;
-    $('#feeBadge').textContent = Number.isInteger(pf) ? `protocol fee ${pf / 100}%` : 'protocol fee ?';
-    $('#feeBadge').className = `badge ${pf === meta.requiredProtocolFeeRate ? 'ok' : 'bad'}`;
+    $('#feeBadge').textContent = Number.isInteger(pf) ? `fee ${pf / 100}%` : 'fee ?';
+    $('#feeBadge').className = `pill ${pf === meta.requiredProtocolFeeRate ? 'ok' : 'bad'}`;
     if (Number.isInteger(pf) && pf !== meta.requiredProtocolFeeRate) {
       setMsg('#quoteMsg', `This config's protocol fee is ${pf / 100}%, not the required ${meta.requiredProtocolFeeRate / 100}%. Launches on it are refused.`, 'bad');
     }
-    $('#forcedNames').textContent = meta.forcedQuotes.map((q) => q.symbol).join(' + ');
+    $('#forcedNames').textContent = meta.forcedQuotes.map((q) => '$' + q.symbol.toUpperCase()).join(' + ');
     $('#configAddr').value = state.config;
-    $('#exploreConfig').textContent = state.config;
-    $('#exploreSince').textContent = new Date(meta.discoverySinceUnix * 1000).toLocaleString();
+    const cfgLink = $('#exploreConfig');
+    cfgLink.textContent = short(state.config, 4);
+    cfgLink.href = `https://solscan.io/account/${state.config}`;
+    $('#exploreSince').textContent = new Date(meta.discoverySinceUnix * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     $('#configNote').textContent = meta.config?.error
-      ? `Could not read config: ${meta.config.error}`
+      ? `could not read config: ${meta.config.error}`
       : `fee authority ${short(meta.config.feeAuthority)} · protocol fee ${meta.config.defaultProtocolFeeRate / 100}% of swap fees`;
 
-    // Quote table: forced first (always on), then optional, then customs.
     for (const q of meta.forcedQuotes) {
       state.quotes[q.mint] = { ...(state.quotes[q.mint] || {}), on: true, info: q, forced: true };
       if (!(state.quotes[q.mint].pct >= q.minSupplyPercent)) state.quotes[q.mint].pct = q.minSupplyPercent;
@@ -188,19 +201,17 @@
         try {
           const { quote } = await api(`/api/orca/quote-info?mint=${encodeURIComponent(mint)}`);
           state.quotes[mint] = { on: true, pct: state.quotes[mint]?.pct ?? 0, info: quote, forced: false, custom: true };
-        } catch (_) { /* dropped below */ }
+        } catch (_) { /* dropped */ }
       } else {
         state.quotes[mint].custom = true;
       }
     }
     if (!Object.values(state.quotes).some((q) => q.on && !q.forced)) {
-      // Nothing optional selected (fresh page): default SOL on.
       const sol = meta.optionalQuotes.find((q) => q.symbol === 'SOL');
       if (sol) state.quotes[sol.mint].on = true;
     }
-    if (!hasExplicitSplit()) applyDefaultSplit();
+    if (!Object.values(state.quotes).some((q) => q.on && !q.forced && q.pct > 0)) applyDefaultSplit();
 
-    // Fee tiers
     const sel = $('#feeTier');
     sel.innerHTML = '';
     for (const t of meta.feeTiers) {
@@ -211,19 +222,13 @@
       sel.appendChild(opt);
     }
     const wanted = state.tickSpacing && meta.feeTiers.find((t) => t.tickSpacing === state.tickSpacing && t.usable)
-      ? state.tickSpacing
-      : meta.defaultFeeTier?.tickSpacing;
+      ? state.tickSpacing : meta.defaultFeeTier?.tickSpacing;
     if (wanted) sel.value = String(wanted);
     state.tickSpacing = Number(sel.value) || null;
     $('#feeTierNote').textContent = meta.feeTierSource === 'fallback'
       ? 'RPC refused the fee tier scan; showing the last known tiers for this config.'
-      : `${meta.feeTiers.length} tier(s) live on the config.`;
-    $('#rpcBadge').textContent = 'mainnet';
+      : `${meta.feeTiers.length} tier${meta.feeTiers.length === 1 ? '' : 's'} live on the config.`;
     renderQuotes();
-  }
-
-  function hasExplicitSplit() {
-    return Object.values(state.quotes).some((q) => q.on && !q.forced && q.pct > 0);
   }
 
   function applyDefaultSplit() {
@@ -249,6 +254,16 @@
   // Quotes UI
   // ---------------------------------------------------------------------
 
+  const DOTS = {
+    SOL: 'linear-gradient(135deg,#9945ff,#14f195)', USDC: '#2775ca', USDT: '#26a17b',
+    TOKEN: 'linear-gradient(135deg,#7c3aed,#ef4444)', INFITY: 'linear-gradient(135deg,#f472b6,#fbbf24)',
+  };
+  function dotFor(info) {
+    if (info.imageUrl) return `<img class="dot" src="${esc(info.imageUrl)}" alt="">`;
+    const bg = DOTS[String(info.symbol || '').toUpperCase()] || 'linear-gradient(135deg,#ffd166,#ff7a3d)';
+    return `<span class="dot" style="background:${bg}"></span>`;
+  }
+
   function orderedQuotes() {
     const list = Object.entries(state.quotes).map(([mint, q]) => ({ mint, ...q }));
     list.sort((a, b) => (b.forced - a.forced) || ((b.custom ? 0 : 1) - (a.custom ? 0 : 1)));
@@ -260,22 +275,26 @@
     host.innerHTML = '';
     for (const q of orderedQuotes()) {
       const row = document.createElement('div');
-      row.className = `quote-row${q.on ? '' : ' is-off'}`;
-      const img = q.info.imageUrl ? `<img src="${esc(q.info.imageUrl)}" alt="">` : '<span style="width:26px;height:26px;border-radius:50%;background:#333;display:inline-block"></span>';
-      const t22 = q.info.programId === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' ? ' · Token-2022' : '';
-      const fee = q.info.transferFeeBps ? ` · ${q.info.transferFeeBps / 100}% transfer fee` : '';
+      row.className = `qrow${q.on ? '' : ' off'}`;
+      const t22 = q.info.programId === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' ? 'Token-2022' : '';
+      const fee = q.info.transferFeeBps ? `${q.info.transferFeeBps / 100}% transfer fee` : '';
+      const meta = [q.info.name, fmtUsd(q.info.priceUsd), t22, fee].filter(Boolean).join(' · ');
       row.innerHTML = `
-        <input type="checkbox" ${q.on ? 'checked' : ''} ${q.forced ? 'disabled checked' : ''} data-toggle="${esc(q.mint)}" title="${q.forced ? 'required' : 'include'}">
-        <div>
-          <div class="qname">${img} ${esc(q.info.symbol)} ${q.forced ? '<span class="lockchip"><i class="fas fa-lock"></i> required · min ' + q.info.minSupplyPercent + '%</span>' : ''}</div>
-          <div class="qmeta">${esc(q.info.name || '')} · ${fmtUsd(q.info.priceUsd)}${t22}${fee} · ${acctLink(q.mint)}</div>
+        <button class="sw${q.on ? ' on' : ''}${q.forced ? ' forced' : ''}" data-toggle="${esc(q.mint)}" ${q.forced ? 'disabled' : ''} title="${q.forced ? 'required' : 'include'}"><span class="knob"></span></button>
+        <div style="min-width:0">
+          <div class="qname">${dotFor(q.info)}<span>${esc(q.info.symbol)}</span>${q.forced ? `<span class="req"><i class="fas fa-lock"></i>required · min ${q.info.minSupplyPercent}%</span>` : ''}</div>
+          <div class="qmeta">${esc(meta)} · ${acctLink(q.mint)}</div>
         </div>
-        <div class="field has-addons" style="margin:0"><div class="control"><input class="input pct" type="number" step="0.01" min="${q.forced ? q.info.minSupplyPercent : 0.01}" max="100" value="${q.pct}" data-pct="${esc(q.mint)}" ${q.on ? '' : 'disabled'}></div><div class="control"><span class="button is-static" style="background:var(--panel);border-color:var(--line);color:var(--muted)">%</span></div></div>
-        <div>${q.custom ? `<button class="button is-ghost is-small" data-remove="${esc(q.mint)}" title="remove"><i class="fas fa-times"></i></button>` : ''}</div>`;
+        <div class="qright">
+          <div class="pct"><input type="number" step="0.01" min="${q.forced ? q.info.minSupplyPercent : 0.01}" max="100" value="${q.pct}" data-pct="${esc(q.mint)}" ${q.on ? '' : 'disabled'} inputmode="decimal"><span>%</span></div>
+          ${q.custom ? `<button class="qx" data-remove="${esc(q.mint)}" title="remove"><i class="fas fa-times"></i></button>` : ''}
+        </div>`;
       host.appendChild(row);
     }
-    host.querySelectorAll('[data-toggle]').forEach((cb) => cb.addEventListener('change', () => {
-      state.quotes[cb.dataset.toggle].on = cb.checked;
+    host.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', () => {
+      const q = state.quotes[b.dataset.toggle];
+      if (q.forced) return;
+      q.on = !q.on;
       applyDefaultSplit();
       renderQuotes();
     }));
@@ -313,12 +332,14 @@
         $('#sumRem').textContent = fmtPct(plan.remainderPercent);
         $('#sumSol').textContent = cost.totalSol;
         $('#fundNeed').textContent = cost.totalSol;
-        setMsg('#quoteMsg', '');
+        $('#fundNeed2').textContent = cost.totalSol;
+        $('#quotesSummary').textContent = `${plan.quotes.length} pools · ${fmtPct(plan.totalPercent)} in`;
+        if (!$('#quoteMsg').textContent.includes('protocol fee')) setMsg('#quoteMsg', '');
         renderPoolPreview(plan);
       } catch (err) {
         state.estimate = null;
-        $('#sumPools').textContent = '—';
-        $('#sumSol').textContent = '—';
+        $('#sumPools').textContent = '—'; $('#sumSol').textContent = '—';
+        $('#quotesSummary').textContent = '';
         setMsg('#quoteMsg', esc(err.message), 'bad');
         $('#poolPreview').innerHTML = '';
       }
@@ -329,35 +350,36 @@
   function launchPriceUsd() {
     const supply = Number($('#tokSupply').value);
     const mcap = Number($('#tokMcap').value);
-    if (!(supply > 0) || !(mcap > 0)) return null;
-    return mcap / supply;
+    return supply > 0 && mcap > 0 ? mcap / supply : null;
   }
 
   function renderImplied() {
     const p = launchPriceUsd();
-    $('#impliedPrice').innerHTML = p
-      ? `Opens at <strong>${fmtUsd(p)}</strong> per token — ${fmtNum(1 / p, 0)} tokens per dollar.`
-      : 'Enter a supply and a starting market cap.';
-    $$('#mcapPresets button').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.mcap) === Number($('#tokMcap').value)));
+    $('#impliedPrice').textContent = p ? fmtUsd(p) : '—';
+    $('#impliedPerDollar').textContent = p ? `${fmtNum(1 / p, 0)} tokens` : '—';
+    $$('#mcapPresets .preset').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.mcap) === Number($('#tokMcap').value)));
   }
 
   function renderPoolPreview(plan) {
     const p = launchPriceUsd();
     const supply = Number($('#tokSupply').value);
-    const rows = plan.quotes.map((q) => {
+    $('#poolPreview').innerHTML = plan.quotes.map((q) => {
       const info = state.quotes[q.mint]?.info || {};
-      const inQuote = p && info.priceUsd ? p / info.priceUsd : null;
-      const tokens = supply * q.supplyPercent / 100;
-      return `<tr><td>${esc(info.symbol || short(q.mint))}${q.forced ? ' <i class="fas fa-lock muted"></i>' : ''}</td><td>${fmtPct(q.supplyPercent)}</td><td>${fmtNum(tokens, 0)}</td><td>${inQuote ? fmtNum(inQuote, 6) + ' ' + esc(info.symbol) : '<span class="muted">no price</span>'}</td><td>${fmtUsd(p)}</td></tr>`;
+      const inQuote = p && info.priceUsd ? `${fmtNum(p / info.priceUsd, 6)} ${esc(info.symbol)}` : 'no price';
+      return `<div class="prow">
+        <div class="n">${esc(info.symbol || short(q.mint))}${q.forced ? ' <i class="fas fa-lock" style="font-size:9px;color:var(--gold)"></i>' : ''} <span>· ${fmtPct(q.supplyPercent)}</span></div>
+        <div class="r">${fmtNum(supply * q.supplyPercent / 100, 0)} locked</div>
+        <div class="d">opens ${inQuote}</div>
+        <div class="r gold">${fmtUsd(p)}</div>
+      </div>`;
     }).join('');
-    $('#poolPreview').innerHTML = `<table class="pools-table"><thead><tr><th>Pool</th><th>Supply share</th><th>Tokens locked</th><th>Opening price</th><th>USD</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   $('#btnAddQuote').addEventListener('click', async () => {
     const mint = $('#customQuote').value.trim();
     if (!isPubkey(mint)) return setMsg('#quoteMsg', 'That is not a valid mint address.', 'bad');
     if (state.quotes[mint]) return setMsg('#quoteMsg', 'Already in the list.', 'warn');
-    setMsg('#quoteMsg', '<span class="spin"><i class="fas fa-circle-notch"></i></span> looking up mint…');
+    setMsg('#quoteMsg', '<i class="fas fa-circle-notch spin"></i> looking up mint…');
     try {
       const { quote } = await api(`/api/orca/quote-info?mint=${encodeURIComponent(mint)}`);
       if (!quote.priceUsd) throw new Error(`${quote.symbol}: no USD price found — the launch cannot derive an opening price for it.`);
@@ -372,39 +394,39 @@
   });
 
   $('#feeTier').addEventListener('change', () => { state.tickSpacing = Number($('#feeTier').value); persist(); updateGates(); });
-
   $('#btnLoadConfig').addEventListener('click', async () => {
     const addr = $('#configAddr').value.trim();
     if (!isPubkey(addr)) return;
     $('#configNote').textContent = 'loading…';
     try { await loadMeta(addr); } catch (err) { $('#configNote').textContent = err.message; }
   });
-
   $('#btnListConfigs').addEventListener('click', async () => {
     const host = $('#configList');
     host.classList.remove('hidden');
-    host.innerHTML = '<span class="muted">scanning configs…</span>';
+    host.innerHTML = '<span class="note mono">scanning configs…</span>';
     try {
       const { configs } = await api('/api/orca/configs');
-      host.innerHTML = configs.map((c) => `<div><button class="button is-ghost is-small mono" data-cfg="${esc(c.address)}">${esc(c.address)}</button> <span class="muted">protocol fee ${c.defaultProtocolFeeRate / 100}%</span></div>`).join('');
-      host.querySelectorAll('[data-cfg]').forEach((b) => b.addEventListener('click', () => { $('#configAddr').value = b.dataset.cfg; $('#btnLoadConfig').click(); }));
+      host.innerHTML = configs.map((c) => `<button class="cfgbtn" data-cfg="${esc(c.address)}">${esc(c.address)} <span>· fee ${c.defaultProtocolFeeRate / 100}%</span></button>`).join('');
+      host.querySelectorAll('[data-cfg]').forEach((b) => b.addEventListener('click', () => { $('#configAddr').value = b.dataset.cfg; host.classList.add('hidden'); $('#btnLoadConfig').click(); }));
     } catch (err) {
-      host.innerHTML = `<span class="muted">${esc(err.message)}</span>`;
+      host.innerHTML = `<span class="note mono">${esc(err.message)}</span>`;
     }
   });
 
   // ---------------------------------------------------------------------
-  // Token form
+  // Token form + market cap
   // ---------------------------------------------------------------------
 
   ['#tokName', '#tokSymbol', '#tokSupply', '#tokDesc', '#tokMcap'].forEach((sel) => {
     $(sel).addEventListener('input', () => { renderImplied(); refreshEstimate(); });
   });
-  $$('#mcapPresets button').forEach((b) => b.addEventListener('click', () => {
+  $$('#mcapPresets .preset').forEach((b) => b.addEventListener('click', () => {
     $('#tokMcap').value = b.dataset.mcap;
-    renderImplied();
-    refreshEstimate();
+    renderImplied(); refreshEstimate();
   }));
+  $('#tokLogo').addEventListener('change', () => {
+    $('#logoLabel').textContent = $('#tokLogo').files[0]?.name || 'png / jpg / gif / webp';
+  });
 
   // ---------------------------------------------------------------------
   // Wallet
@@ -417,17 +439,16 @@
     if (has) {
       $('#walletAddr').textContent = state.wallet.publicKey;
       $('#walletQr').src = state.wallet.qrCode || '';
-      $('#fundQr').src = state.wallet.qrCode || '';
-      $('#fundQr').classList.toggle('hidden', !state.wallet.qrCode);
-      $('#fundAddr').textContent = state.wallet.publicKey;
-      $('#savedSecret').checked = state.savedSecret;
+      const hasSecret = !!state.wallet.secretKeyB58;
+      $('#secretBlock').classList.toggle('hidden', !hasSecret);
+      $('#noSecret').classList.toggle('hidden', hasSecret);
       const sec = $('#walletSecret');
-      if (state.wallet.secretKeyB58) { sec.dataset.full = state.wallet.secretKeyB58; }
-      else { sec.textContent = 'stored on this machine (recovery list) — not shown again'; sec.dataset.full = ''; }
-      setBadge('#walletState', short(state.wallet.publicKey), 'ok');
+      sec.dataset.full = state.wallet.secretKeyB58 || '';
+      $('#savedSecret').classList.toggle('on', state.savedSecret);
+      setPill('#walletState', short(state.wallet.publicKey), 'ok mono');
       startBalancePolling();
     } else {
-      setBadge('#walletState', '');
+      setPill('#walletState', '');
       stopBalancePolling();
     }
     updateGates();
@@ -440,11 +461,12 @@
       state.wallet = { publicKey: wallet.publicKey, secretKeyB58: wallet.secretKeyB58, qrCode: wallet.qrCode };
       state.savedSecret = false;
       state.token = null; state.launch = null; state.finish = null;
-      $('#walletSecret').textContent = '••••••••••••••••••••••••';
-      renderWallet();
-      persist();
+      lastBalance = 0;
+      $('#walletSecret').textContent = '••••••••••••••••••••••••••••••••';
+      $('#walletSecret').className = 't dim';
+      renderWallet(); persist();
     } catch (err) {
-      alert(err.message);
+      alert(describeError(err));
     } finally {
       $('#btnGenWallet').disabled = false;
     }
@@ -453,31 +475,37 @@
   $('#btnUseWallet').addEventListener('click', async () => {
     const pk = $('#existingWallet').value.trim();
     if (!isPubkey(pk)) return alert('Enter a wallet public key.');
-    // The secret lives in the server's recovery list; we only need the key.
     let qrCode = null;
     try { const r = await api(`/api/wallet-qr?publicKey=${encodeURIComponent(pk)}`); qrCode = r.qrCode || null; } catch (_) { /* optional */ }
     state.wallet = { publicKey: pk, secretKeyB58: null, qrCode };
     state.savedSecret = true;
-    renderWallet();
-    persist();
+    renderWallet(); persist();
   });
 
   $('#btnRevealSecret').addEventListener('click', () => {
     const sec = $('#walletSecret');
     if (!state.wallet?.secretKeyB58) return;
-    sec.textContent = sec.textContent.startsWith('•') ? state.wallet.secretKeyB58 : '••••••••••••••••••••••••';
+    const hidden = sec.textContent.startsWith('•');
+    sec.textContent = hidden ? state.wallet.secretKeyB58 : '••••••••••••••••••••••••••••••••';
+    sec.className = hidden ? 't lit' : 't dim';
+    $('#btnRevealSecret').innerHTML = hidden ? '<i class="far fa-eye-slash"></i>' : '<i class="far fa-eye"></i>';
   });
-  $('#savedSecret').addEventListener('change', () => { state.savedSecret = $('#savedSecret').checked; persist(); updateGates(); });
+  $('#savedSecret').addEventListener('click', () => {
+    state.savedSecret = !state.savedSecret;
+    $('#savedSecret').classList.toggle('on', state.savedSecret);
+    persist(); updateGates();
+  });
   $('#btnForgetWallet').addEventListener('click', () => {
     if (state.launch && !state.finish) {
       if (!confirm('This wallet has pools launched but not yet handed off. Start over anyway? (The wallet stays in the recovery list.)')) return;
     }
     state.wallet = null; state.token = null; state.launch = null; state.finish = null; state.savedSecret = false;
+    lastBalance = null;
     $('#launchProg').innerHTML = ''; $('#launchResults').classList.add('hidden'); $('#finishProg').innerHTML = ''; $('#finishResults').classList.add('hidden');
-    $('#tokenCreated').classList.add('hidden');
-    setBadge('#tokenState', ''); setBadge('#launchState', ''); setBadge('#finishState', ''); setBadge('#fundState', '');
-    renderWallet();
-    persist();
+    $('#tokenCreated').classList.add('hidden'); setMsg('#launchMsg', ''); setMsg('#finishMsg', '');
+    setPill('#tokenState', ''); setPill('#launchState', ''); setPill('#finishState', '');
+    ['#tokName', '#tokSymbol', '#tokSupply', '#tokDesc', '#tokLogo'].forEach((s) => { $(s).disabled = false; });
+    renderWallet(); persist();
   });
 
   // ---------------------------------------------------------------------
@@ -485,23 +513,28 @@
   // ---------------------------------------------------------------------
 
   let balanceTimer = null;
-  let lastBalance = null;
   async function pollBalance() {
     if (!state.wallet) return;
     try {
       const { balance } = await api('/api/check-balance', { body: { publicKey: state.wallet.publicKey } });
       lastBalance = Number(balance) || 0;
-      $('#fundBal').textContent = lastBalance.toFixed(4);
-      const need = state.estimate?.cost?.totalSol || 0;
-      setBadge('#fundState', lastBalance >= need && need > 0 ? 'funded' : (lastBalance > 0 ? `${lastBalance.toFixed(3)} SOL` : 'waiting'), lastBalance >= need && need > 0 ? 'ok' : 'warn');
       updateGates();
     } catch (_) { /* transient */ }
   }
   function startBalancePolling() { stopBalancePolling(); pollBalance(); balanceTimer = setInterval(pollBalance, 6000); }
   function stopBalancePolling() { clearInterval(balanceTimer); balanceTimer = null; }
 
+  function renderFunding(need, funded) {
+    const bal = lastBalance || 0;
+    $('#fundBal').textContent = bal.toFixed(3);
+    $('#fundBal').className = `n${funded ? ' ok' : ''}`;
+    $('#fundLabel').textContent = funded ? 'funded ✓' : (bal > 0 ? 'receiving…' : 'waiting for SOL');
+    $('#fundLabel').className = `lab${funded ? ' ok' : ''}`;
+    $('#fundBar').style.width = `${need > 0 ? Math.min(100, (bal / need) * 100) : 0}%`;
+  }
+
   // ---------------------------------------------------------------------
-  // Gates
+  // Gates, steps, dock
   // ---------------------------------------------------------------------
 
   function tokenFormValid() {
@@ -509,30 +542,80 @@
       && Number($('#tokSupply').value) > 0 && Number($('#tokMcap').value) > 0;
   }
 
+  let ready = false;
   function updateGates() {
-    const haveWallet = !!state.wallet && state.savedSecret;
-    const planOk = !!state.estimate;
     const need = state.estimate?.cost?.totalSol || 0;
-    const funded = (lastBalance || 0) >= need && need > 0;
-    const launched = !!state.launch;
-    $('#btnLaunch').disabled = !(haveWallet && (state.token || tokenFormValid()) && planOk && state.tickSpacing && (funded || launched));
-    $('#btnFinish').disabled = !(launched && isPubkey($('#destWallet').value) && !state.finish);
-    $('#card-launch').classList.toggle('is-done', launched);
-    $('#card-finish').classList.toggle('is-done', !!state.finish);
-    $('#card-token').classList.toggle('is-done', !!state.token);
-    $('#card-wallet').classList.toggle('is-done', haveWallet);
-    $('#card-fund').classList.toggle('is-done', funded || launched);
-    if (state.token) {
-      ['#tokName', '#tokSymbol', '#tokSupply', '#tokDesc', '#tokLogo'].forEach((s) => { $(s).disabled = true; });
+    const on = state.estimate?.plan?.quotes?.length || 0;
+    const total = state.estimate?.plan?.totalPercent ?? 0;
+    const hasWallet = !!state.wallet;
+    const funded = hasWallet && need > 0 && (lastBalance || 0) >= need;
+    const launched = !!state.launch && !state.launch.partial;
+    const tokenOk = !!state.token || tokenFormValid();
+    const gates = [
+      { ok: tokenOk, label: state.token ? `Token ${state.token.symbol} minted` : 'Token name, symbol, supply & market cap' },
+      { ok: on > 0 && !!state.estimate && !!state.tickSpacing, label: state.estimate ? `${on} pool${on === 1 ? '' : 's'} planned · ${fmtPct(total)} of supply` : 'Pick your quotes' },
+      { ok: hasWallet && state.savedSecret, label: hasWallet ? (state.savedSecret ? 'Launch wallet ready' : 'Confirm you saved the secret key') : 'Generate a launch wallet' },
+      { ok: funded || launched, label: funded ? `Funded · ${(lastBalance || 0).toFixed(3)} SOL` : `Fund ${need || '—'} SOL` },
+    ];
+    ready = gates.every((g) => g.ok) && !state.launching && !launched;
+    const resumable = !!state.launch?.partial && !state.launching && hasWallet;
+    $('#gates').innerHTML = launched ? '' : gates.map((g) => `<div class="gate${g.ok ? ' ok' : ''}"><i class="${g.ok ? 'fas fa-check-circle' : 'far fa-circle'}"></i>${esc(g.label)}</div>`).join('');
+
+    const btn = $('#btnLaunch');
+    btn.disabled = !(ready || resumable);
+    btn.className = `launch-btn${launched ? ' done' : (ready || resumable) ? ' ready' : ''}`;
+    btn.querySelector('i').className = state.launching ? 'fas fa-circle-notch spin' : launched ? 'fas fa-lock' : 'fas fa-rocket';
+    $('#btnLaunchLabel').textContent = state.launching ? 'Launching…' : launched ? 'Locked forever' : resumable ? 'Resume launch' : 'Launch';
+    $('#card-launch').className = `card${launched ? ' ok' : (ready || resumable) ? ' ready' : ''}`;
+
+    $('#btnFinish').disabled = !(launched && isPubkey($('#destWallet').value) && !state.finish && !state.finishing);
+    $('#card-finish').className = `card${state.finish ? ' ok' : launched ? '' : ' dimmed'}`;
+    $('#card-wallet').className = `card${hasWallet && state.savedSecret ? ' ok' : ''}`;
+    $('#card-token').className = `card${state.token ? ' ok' : ''}`;
+
+    setStep('#stepToken', state.token ? 'done' : '', 1);
+    setStep('#stepQuotes', launched ? 'done' : '', 2);
+    setStep('#stepWallet', hasWallet && state.savedSecret && (funded || launched) ? 'done' : hasWallet ? 'active' : '', 3);
+    setStep('#stepLaunch', launched ? 'done' : (ready || state.launching) ? 'active' : '', 4);
+    setStep('#stepFinish', state.finish ? 'done' : launched ? 'active' : '', 5);
+    if (state.token) ['#tokName', '#tokSymbol', '#tokSupply', '#tokDesc', '#tokLogo'].forEach((s) => { $(s).disabled = true; });
+    if (hasWallet) renderFunding(need, funded);
+    renderDock({ gates, on, need, launched });
+  }
+
+  function renderDock(ctx) {
+    const dock = $('#dock');
+    if (tab !== 'launch' || !ctx) { dock.classList.add('hidden'); return; }
+    const { gates, on, need, launched } = ctx;
+    let k, v, label, active, action;
+    if (!launched) {
+      const first = gates.find((g) => !g.ok);
+      k = ready ? 'Ready' : 'Next step';
+      v = ready ? `${on} pools · ${need} SOL` : (first?.label || '');
+      label = state.launching ? 'Launching…' : 'Launch';
+      active = ready;
+      action = () => { if (ready) $('#btnLaunch').click(); else scrollToCard('#card-launch'); };
+    } else if (!state.finish) {
+      k = 'Locked'; v = `${state.launch.results.length} pools · 100% LP is yours`; label = 'Send home'; active = true;
+      action = () => { scrollToCard('#card-finish'); $('#destWallet').focus(); };
+    } else {
+      dock.classList.add('hidden'); return;
     }
+    dock.classList.remove('hidden');
+    $('#dockK').textContent = k; $('#dockV').textContent = v;
+    const b = $('#dockBtn'); b.textContent = label; b.className = `btn${active ? ' active' : ''}`; b.onclick = action;
+  }
+  function scrollToCard(sel) {
+    const el = $(sel);
+    if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 70, behavior: 'smooth' });
   }
 
   // ---------------------------------------------------------------------
-  // Launch: token create + orca pools, with progress
+  // Launch: token create + orca pools, with live progress
   // ---------------------------------------------------------------------
 
   function progRow(id, label, sub) {
-    return `<li id="${id}" class="${sub ? 'sub' : ''}"><span class="st pending"><i class="far fa-circle"></i></span><span>${label}</span><span class="extra"></span></li>`;
+    return `<div id="${id}" class="pr${sub ? ' sub' : ''}"><span class="st"><i class="far fa-circle"></i></span><span class="lb">${label}</span><span class="ex"></span></div>`;
   }
   function progSet(id, status, extra) {
     const li = document.getElementById(id);
@@ -540,10 +623,10 @@
     const st = li.querySelector('.st');
     st.className = `st ${status}`;
     st.innerHTML = status === 'done' ? '<i class="fas fa-check-circle"></i>'
-      : status === 'running' ? '<span class="spin"><i class="fas fa-circle-notch"></i></span>'
+      : status === 'running' ? '<i class="fas fa-circle-notch"></i>'
       : status === 'failed' ? '<i class="fas fa-times-circle"></i>'
       : '<i class="far fa-circle"></i>';
-    if (extra !== undefined) li.querySelector('.extra').innerHTML = extra;
+    if (extra !== undefined) li.querySelector('.ex').innerHTML = extra;
   }
 
   function buildLaunchTree(plan) {
@@ -609,19 +692,23 @@
     };
     persist();
     progSet('p-token', 'done', acctLink(state.token.mint, short(state.token.mint)));
-    $('#tokenCreated').classList.remove('hidden');
-    $('#tokenCreated').innerHTML = `Minted <strong>${esc(state.token.symbol)}</strong> · ${acctLink(state.token.mint, state.token.mint)} · mint &amp; freeze authorities renounced.`;
-    setBadge('#tokenState', 'minted', 'ok');
-    updateGates();
+    renderTokenCreated();
     return state.token;
   }
 
+  function renderTokenCreated() {
+    if (!state.token) return;
+    $('#tokenCreated').classList.remove('hidden');
+    $('#tokenCreated').innerHTML = `Minted <strong style="font-family:inherit">${esc(String(state.token.symbol).toUpperCase())}</strong> · ${acctLink(state.token.mint, short(state.token.mint, 6))} · mint &amp; freeze authorities renounced.`;
+    setPill('#tokenState', 'minted', 'ok');
+  }
+
   $('#btnLaunch').addEventListener('click', async () => {
-    if (!state.estimate) return;
-    const btn = $('#btnLaunch');
-    btn.disabled = true;
+    if (!state.estimate || state.launching) return;
+    state.launching = true;
     setMsg('#launchMsg', '');
-    setBadge('#launchState', 'running', 'warn');
+    setPill('#launchState', 'running', 'warn');
+    updateGates();
     const plan = state.estimate.plan;
     buildLaunchTree(plan);
     stopBalancePolling();
@@ -640,16 +727,15 @@
           whirlpoolsConfig: state.config,
           tickSpacing: state.tickSpacing,
           priorResults: state.launch?.results || [],
-          tokenMeta: { name: token.name, symbol: token.symbol, imageUrl: token.imageUri },
         },
       });
-      await sleep(1500); // let the last progress events land
+      await sleep(1500);
       stopProgressPolling();
       state.launch = { results: r.results, plan: r.plan, feeRate: r.feeRate, tickSpacing: r.tickSpacing, whirlpoolsConfig: r.whirlpoolsConfig, mcap };
       persist();
       r.results.forEach((res, i) => { progSet(`p-${i}`, 'done'); progSet(`p-${i}-pool`, 'done', acctLink(res.poolId)); progSet(`p-${i}-pos`, 'done', acctLink(res.positionMint)); progSet(`p-${i}-lock`, 'done', txLink(res.lockTxId)); });
       renderLaunchResults();
-      setBadge('#launchState', `${r.results.length} pools locked`, 'ok');
+      setPill('#launchState', `${r.results.length} pools locked`, 'ok');
       setMsg('#launchMsg', 'Every position is permanently locked. Enter your wallet below to receive the locked positions, the un-pooled supply and the leftover SOL.', 'ok');
     } catch (err) {
       stopProgressPolling();
@@ -657,28 +743,26 @@
         state.launch = { ...(state.launch || {}), results: err.partialResults, partial: true };
         persist();
       }
-      setBadge('#launchState', 'failed', 'bad');
-      setMsg('#launchMsg', `${esc(describeError(err))}${err.failedPhase === 'pre_flight' || err.code === 'OP_IN_FLIGHT' ? '' : '<br><span class="muted">Nothing is lost: fix the cause (usually funding) and press Launch again with this wallet — finished pools are skipped.</span>'}`, 'bad');
+      setPill('#launchState', 'failed', 'bad');
+      const retry = err.failedPhase === 'pre_flight' || err.code === 'OP_IN_FLIGHT' ? '' : '<br><span class="m">Nothing is lost: fix the cause (usually funding) and press Launch again with this wallet — finished pools are skipped.</span>';
+      setMsg('#launchMsg', `${esc(describeError(err))}${retry}`, 'bad');
     } finally {
+      state.launching = false;
       startBalancePolling();
       updateGates();
-      if (!state.launch || state.launch.partial) btn.disabled = false;
     }
   });
 
   function renderLaunchResults() {
     const L = state.launch;
     if (!L?.results?.length) return;
-    const rows = L.results.map((r) => `<tr>
-      <td>${esc(r.quoteSymbol)}${r.forced ? ' <i class="fas fa-lock muted"></i>' : ''}</td>
-      <td>${fmtPct(r.supplyPercent)}</td>
-      <td>${fmtUsd(r.launchPriceUsd)}</td>
-      <td>${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a></td>
-      <td>${acctLink(r.positionMint)}</td>
-      <td>${r.locked ? `<span class="badge ok">locked</span> ${txLink(r.lockTxId)}` : '<span class="badge bad">not locked</span>'}</td>
-    </tr>`).join('');
     $('#launchResults').classList.remove('hidden');
-    $('#launchResults').innerHTML = `<table class="pools-table"><thead><tr><th>Quote</th><th>Share</th><th>Opened at</th><th>Pool</th><th>Position</th><th>Lock</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $('#launchResults').innerHTML = L.results.map((r) => `<div class="res pop">
+      <div class="n">${esc(r.quoteSymbol)}${r.forced ? ' <i class="fas fa-lock" style="font-size:9px;color:var(--gold)"></i>' : ''} <span>· ${fmtPct(r.supplyPercent)} · opened ${fmtUsd(r.launchPriceUsd)}</span></div>
+      <span class="lk${r.locked ? '' : ' bad'}"><i class="fas fa-${r.locked ? 'lock' : 'exclamation-triangle'}"></i> ${r.locked ? 'locked' : 'not locked'}</span>
+      <div class="links">pool ${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a> · position ${acctLink(r.positionMint)}</div>
+      <span class="tx">${txLink(r.lockTxId)}</span>
+    </div>`).join('');
   }
 
   // ---------------------------------------------------------------------
@@ -693,7 +777,7 @@
       case 'position_transfer_done': progSet(`f-${ev.positionMint}`, 'done', txLink(ev.txId)); break;
       case 'position_transfer_failed': progSet(`f-${ev.positionMint}`, 'failed', esc(ev.error || '')); break;
       case 'sweep_tokens_start': progSet('f-tokens', 'running'); break;
-      case 'sweep_tokens_done': progSet('f-tokens', 'done', `${ev.transferred} transfer(s)`); break;
+      case 'sweep_tokens_done': progSet('f-tokens', 'done', `${ev.transferred} transfer${ev.transferred === 1 ? '' : 's'}`); break;
       case 'sweep_sol_start': progSet('f-sol', 'running'); break;
       case 'sweep_sol_done': progSet('f-sol', 'done', `${fmtNum(Number(ev.sol) || 0, 4)} SOL`); break;
       default: break;
@@ -702,12 +786,12 @@
 
   $('#btnFinish').addEventListener('click', async () => {
     const dest = $('#destWallet').value.trim();
-    if (!isPubkey(dest)) return;
+    if (!isPubkey(dest) || state.finishing) return;
     if (!confirm(`Send every locked position, the un-pooled tokens and the leftover SOL to\n\n${dest}\n\nThis cannot be undone. Double-check the address.`)) return;
-    const btn = $('#btnFinish');
-    btn.disabled = true;
+    state.finishing = true;
     setMsg('#finishMsg', '');
-    setBadge('#finishState', 'running', 'warn');
+    setPill('#finishState', 'running', 'warn');
+    updateGates();
     const positions = state.launch.results.filter((r) => r.locked && r.positionMint).map((r) => ({ positionMint: r.positionMint, quoteSymbol: r.quoteSymbol }));
     $('#finishProg').innerHTML = positions.map((p) => progRow(`f-${p.positionMint}`, `locked position (${esc(p.quoteSymbol)}) → your wallet`)).join('')
       + progRow('f-tokens', 'sweep un-pooled tokens') + progRow('f-sol', 'sweep leftover SOL');
@@ -721,19 +805,25 @@
       persist();
       r.transfers.forEach((t) => progSet(`f-${t.positionMint}`, 'done', t.skipped ? 'already there' : txLink(t.txId)));
       progSet('f-tokens', 'done'); progSet('f-sol', 'done', `${fmtNum(Number(r.sol) || 0, 4)} SOL`);
-      setBadge('#finishState', 'done', 'ok');
-      $('#finishResults').classList.remove('hidden');
-      $('#finishResults').innerHTML = `<div class="msg ok">Done. ${r.transfers.length} locked position(s) now sit in ${acctLink(dest)}. They earn fees forever and can never be withdrawn.${r.walletEmpty ? ' The launch wallet is empty and was removed from the recovery list.' : ' Some dust remains in the launch wallet; it stays in the recovery list.'}</div>`;
+      setPill('#finishState', 'done', 'ok');
+      renderFinished();
     } catch (err) {
       stopProgressPolling();
-      setBadge('#finishState', 'failed', 'bad');
-      setMsg('#finishMsg', `${esc(describeError(err))}<br><span class="muted">Press Send again; completed transfers are skipped.</span>`, 'bad');
-      btn.disabled = false;
+      setPill('#finishState', 'failed', 'bad');
+      setMsg('#finishMsg', `${esc(describeError(err))}<br><span class="m">Press Send again; completed transfers are skipped.</span>`, 'bad');
     } finally {
+      state.finishing = false;
       startBalancePolling();
       updateGates();
     }
   });
+
+  function renderFinished() {
+    const f = state.finish;
+    if (!f) return;
+    $('#finishResults').classList.remove('hidden');
+    $('#finishResults').innerHTML = `<div class="msg ok pop"><strong>Done.</strong> ${f.transfers?.length ?? 0} locked position${f.transfers?.length === 1 ? '' : 's'} now sit in ${acctLink(f.destinationWallet)}. They earn fees forever and can never be withdrawn.${f.walletEmpty ? ' The launch wallet is empty and was removed from the recovery list.' : ' Some dust remains in the launch wallet; it stays in the recovery list.'}</div>`;
+  }
 
   // ---------------------------------------------------------------------
   // Explore feed
@@ -741,40 +831,44 @@
 
   let feedTimer = null;
   async function loadFeed() {
-    $('#feedMsg').innerHTML = '<div class="msg"><span class="spin"><i class="fas fa-circle-notch"></i></span> scanning the config…</div>';
+    $('#feedSpin').classList.add('spin');
+    $('#feedMsg').className = 'feedstat';
+    $('#feedMsg').textContent = 'scanning the config…';
     try {
       const r = await api(`/api/orca/discover?config=${encodeURIComponent(state.config || '')}`);
-      $('#feedMsg').innerHTML = r.launches.length === 0
-        ? `<div class="msg">No launches locked on this config since ${new Date(r.sinceUnix * 1000).toLocaleString()} yet — ${r.scannedPools} pool(s) scanned. Yours could be first.</div>`
-        : `<div class="msg">${r.launches.length} launch(es) · ${r.scannedPools} pool(s) on the config · updated ${new Date(r.fetchedAt * 1000).toLocaleTimeString()}${r.error ? ' · ' + esc(r.error) : ''}</div>`;
-      $('#feed').innerHTML = r.launches.map(renderLaunchCard).join('');
+      $('#feedMsg').textContent = r.launches.length === 0
+        ? `no launches locked on this config since ${new Date(r.sinceUnix * 1000).toLocaleDateString()} yet · ${r.scannedPools} pool${r.scannedPools === 1 ? '' : 's'} scanned · yours could be first`
+        : `${r.launches.length} launch${r.launches.length === 1 ? '' : 'es'} · ${r.scannedPools} pools on the config · updated ${new Date(r.fetchedAt * 1000).toLocaleTimeString()}`;
+      $('#feed').innerHTML = r.launches.map((l, i) => renderLaunchCard(l, i)).join('');
     } catch (err) {
-      $('#feedMsg').innerHTML = `<div class="msg bad">${esc(err.message)}</div>`;
+      $('#feedMsg').className = 'feedstat bad';
+      $('#feedMsg').textContent = describeError(err);
     }
+    $('#feedSpin').classList.remove('spin');
     clearTimeout(feedTimer);
-    feedTimer = setTimeout(() => { if (!$('#tab-explore').classList.contains('hidden')) loadFeed(); }, 60_000);
+    feedTimer = setTimeout(() => { if (tab === 'explore') loadFeed(); }, 60_000);
   }
   $('#btnRefreshFeed').addEventListener('click', loadFeed);
 
-  function renderLaunchCard(l) {
-    const img = l.imageUrl ? `<img src="${esc(l.imageUrl)}" alt="">` : '<span style="width:44px;height:44px;border-radius:50%;background:#333;display:inline-block"></span>';
-    const pools = l.pools.map((p) => `<tr>
-      <td>${esc(p.quoteSymbol)}</td>
-      <td>${p.feePercent}%</td>
-      <td>${p.priceInQuote ? fmtNum(p.priceInQuote, 6) + ' ' + esc(p.quoteSymbol) : '—'}</td>
-      <td>${fmtUsd(p.priceUsd)}</td>
-      <td><span class="badge ok"><i class="fas fa-lock"></i> ${p.lockedPositions} permanent</span></td>
-      <td><a target="_blank" rel="noopener" href="${esc(p.orcaUrl)}">trade</a> · ${acctLink(p.poolId, 'pool')}</td>
-    </tr>`).join('');
-    return `<div class="launch-card">
-      <div class="head">${img}<div><div class="t">${esc(l.name || l.symbol)} <span class="muted">${esc(l.symbol)}</span></div><div class="s">${acctLink(l.tokenMint, l.tokenMint)} · launched ${new Date(l.launchedAt * 1000).toLocaleString()}</div></div></div>
-      <div class="stats">
-        <div><div class="k">Price</div><div class="v">${fmtUsd(l.priceUsd)}</div></div>
-        <div><div class="k">Market cap</div><div class="v">${fmtUsd(l.marketCapUsd)}</div></div>
-        <div><div class="k">Pools</div><div class="v">${l.pools.length}</div></div>
-        <div><div class="k">Quotes</div><div class="v">${l.pools.map((p) => esc(p.quoteSymbol)).join(' · ')}</div></div>
+  function renderLaunchCard(l, i) {
+    const avatar = l.imageUrl ? `<img class="avatar" src="${esc(l.imageUrl)}" alt="">` : '<span class="avatar"></span>';
+    const pools = l.pools.map((p) => `<div class="pool">
+      <div class="n">${esc(p.quoteSymbol)} <span>· ${p.feePercent}% fee</span></div>
+      <span class="lk"><i class="fas fa-lock"></i> ${p.lockedPositions} permanent</span>
+      <div class="pr2">${p.priceInQuote ? `${fmtNum(p.priceInQuote, 6)} ${esc(p.quoteSymbol)}` : '—'} · ${fmtUsd(p.priceUsd)}</div>
+      <div class="lnk"><a target="_blank" rel="noopener" href="${esc(p.orcaUrl)}" style="font-weight:800">trade</a> · <a class="m" target="_blank" rel="noopener" href="${esc(p.solscanUrl)}">pool</a></div>
+    </div>`).join('');
+    return `<div class="lc pop">
+      <div class="head">${avatar}
+        <div style="min-width:0;flex:1"><div class="t"><span class="nm">${esc(l.name || l.symbol)}</span><span class="sy">${esc(l.symbol)}</span></div><div class="s">${acctLink(l.tokenMint, short(l.tokenMint, 5))} · ${ago(l.launchedAt)}</div></div>
+        <div class="mc"><div class="v${i === 0 ? ' gold' : ''}">${fmtUsd(l.marketCapUsd)}</div><div class="k sm">mcap</div></div>
       </div>
-      <table class="pools-table"><thead><tr><th>Quote</th><th>Fee</th><th>Price</th><th>USD</th><th>Liquidity</th><th></th></tr></thead><tbody>${pools}</tbody></table>
+      <div class="stats c3">
+        <div class="stat"><div class="k sm">Price</div><div class="v">${fmtUsd(l.priceUsd)}</div></div>
+        <div class="stat"><div class="k sm">Pools</div><div class="v">${l.pools.length}</div></div>
+        <div class="stat"><div class="k sm">Quotes</div><div class="v">${l.pools.map((p) => esc(p.quoteSymbol)).join(' · ')}</div></div>
+      </div>
+      <div class="pools">${pools}</div>
     </div>`;
   }
 
@@ -806,14 +900,10 @@
     try {
       await loadMeta(state.config);
     } catch (err) {
-      setMsg('#quoteMsg', `Could not load the Orca config: ${esc(err.message)}`, 'bad');
+      setMsg('#quoteMsg', `Could not load the Orca config: ${esc(describeError(err))}`, 'bad');
     }
     renderWallet();
-    if (state.token) {
-      $('#tokenCreated').classList.remove('hidden');
-      $('#tokenCreated').innerHTML = `Minted <strong>${esc(state.token.symbol)}</strong> · ${acctLink(state.token.mint, state.token.mint)}`;
-      setBadge('#tokenState', 'minted', 'ok');
-    }
+    renderTokenCreated();
     if (state.launch?.results?.length) {
       buildLaunchTree({ quotes: state.launch.results.map((r) => ({ mint: r.quoteMint, supplyPercent: r.supplyPercent })) });
       state.launch.results.forEach((res, i) => {
@@ -823,13 +913,9 @@
         progSet(`p-${i}-lock`, res.locked ? 'done' : 'pending', txLink(res.lockTxId));
       });
       renderLaunchResults();
-      setBadge('#launchState', state.launch.partial ? 'partial — press Launch to resume' : `${state.launch.results.length} pools locked`, state.launch.partial ? 'warn' : 'ok');
+      setPill('#launchState', state.launch.partial ? 'partial · resume' : `${state.launch.results.length} pools locked`, state.launch.partial ? 'warn' : 'ok');
     }
-    if (state.finish) {
-      setBadge('#finishState', 'done', 'ok');
-      $('#finishResults').classList.remove('hidden');
-      $('#finishResults').innerHTML = `<div class="msg ok">Handed off to ${acctLink(state.finish.destinationWallet)}.</div>`;
-    }
+    if (state.finish) { setPill('#finishState', 'done', 'ok'); renderFinished(); }
     updateGates();
   })();
 })();

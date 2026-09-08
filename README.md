@@ -29,8 +29,8 @@ price), fund a throwaway wallet, and press Launch:
    `transfer_locked_position` and sweeps the un-pooled supply + SOL.
 
 Two quotes are always in and cannot be removed, **min 1% of supply each**:
-`EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump` (EVUL, Token-2022) and
-`6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f` (infity, Token-2022 with a
+`EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump` ($TOKEN, Token-2022) and
+`6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f` ($INFITY, Token-2022 with a
 6.9% transfer fee). SOL / USDC / USDT / any other priced mint are optional.
 
 The **Explore** tab lists every token whose pools were locked on the config

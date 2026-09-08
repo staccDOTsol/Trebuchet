@@ -8,6 +8,7 @@ Families and licenses:
   - IM Fell DW Pica, IM Fell DW Pica SC  (Igino Marini) — see OFL.txt
   - EB Garamond                          (Georg Duffner) — see OFL.txt
   - JetBrains Mono                        (JetBrains)     — see OFL.txt
+  - Unbounded (variable, latin + latin-ext) (Unbounded Project) — see OFL.txt
 
 All four are licensed under the SIL Open Font License 1.1. The full
 license text is in OFL.txt in this directory. The website

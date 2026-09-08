@@ -210,17 +210,20 @@
   // Tabs
   // ---------------------------------------------------------------------
 
-  let tab = 'launch';
-  $$('.tab[data-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      tab = btn.getAttribute('data-tab');
-      $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b === btn));
-      $('#tab-launch').classList.toggle('hidden', tab !== 'launch');
-      $('#tab-explore').classList.toggle('hidden', tab !== 'explore');
-      if (tab === 'explore') loadFeed();
-      renderDock();
-    });
-  });
+  // Explore is the landing screen; a launch in progress (wallet chosen) or
+  // a #launch hash brings the launcher up instead.
+  let tab = 'explore';
+  function showTab(name) {
+    tab = name;
+    $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b.getAttribute('data-tab') === name));
+    $('#tab-launch').classList.toggle('hidden', name !== 'launch');
+    $('#tab-explore').classList.toggle('hidden', name !== 'explore');
+    if (name === 'explore') loadFeed();
+    try { history.replaceState(null, '', name === 'launch' ? '#launch' : '#'); } catch (_) { /* fine */ }
+    renderDock();
+  }
+  $$('.tab[data-tab]').forEach((btn) => btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab'))));
+  $('#btnStartLaunch').addEventListener('click', () => { showTab('launch'); window.scrollTo({ top: 0 }); });
 
   // ---------------------------------------------------------------------
   // Meta (config, fee tiers, quotes)
@@ -1062,6 +1065,8 @@
     }
     renderWallet();
     renderTokenCreated();
+    if (location.hash === '#launch' || (state.wallet && !state.finish)) showTab('launch');
+    else showTab('explore');
     if (state.launch?.results?.length) {
       buildLaunchTree({ quotes: state.launch.results.map((r) => ({ mint: r.quoteMint, supplyPercent: r.supplyPercent })) });
       state.launch.results.forEach((res, i) => {

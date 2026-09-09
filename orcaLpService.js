@@ -100,6 +100,8 @@ let __connectionFactoryOverride = null;
 export function setConnectionFactoryForTests(fn) { __connectionFactoryOverride = fn; }
 export function resetTestFactories() { __connectionFactoryOverride = null; }
 
+export { makeConnection as getOrcaConnection, programAccounts as getWhirlpoolProgramAccounts };
+
 function makeConnection() {
   if (__connectionFactoryOverride) return __connectionFactoryOverride();
   return new Connection(getRpcUrl(), {

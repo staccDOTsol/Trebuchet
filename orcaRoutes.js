@@ -13,6 +13,9 @@
 //   POST /api/orca/launch     create pools, seed, lock (progress via /api/lp-progress)
 //   POST /api/orca/finish     hand locked positions + leftovers to the launcher
 //   GET  /api/orca/discover   launches locked on the config since the cutoff
+//   GET  /api/orca/claimable?owner=&mint=   pending fees on a creator's locked positions
+//   POST /api/orca/claim/build   unsigned collect-fee txs for the creator's wallet to sign
+//   POST /api/orca/claim/send    submit the signed txs over the server RPC
 //
 // There is no demo path. Every launch is real.
 
@@ -28,6 +31,7 @@ import {
   getLaunch,
   estimateOrcaLaunch,
 } from './orcaLpService.js';
+import { getClaimable, buildClaimTransactions, sendSignedClaims, DEFAULT_MAX_TXS_PER_ROUND } from './orcaClaimService.js';
 import {
   DEFAULT_WHIRLPOOLS_CONFIG,
   ORCA_CONFIG_AUTHORITY,
@@ -144,6 +148,58 @@ export function registerOrcaRoutes(app, deps) {
       res.json({ success: true, launch });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ---- creator fee claims --------------------------------------------------
+
+  function claimScope(src) {
+    const owner = String(src?.owner || '');
+    if (!isPubkeyish(owner)) return { error: 'owner wallet address required' };
+    const mint = src?.mint ? String(src.mint) : null;
+    if (mint && !isPubkeyish(mint)) return { error: 'bad mint' };
+    let poolIds = null;
+    if (Array.isArray(src?.poolIds) && src.poolIds.length) {
+      poolIds = src.poolIds.map(String);
+      if (poolIds.length > 64 || !poolIds.every(isPubkeyish)) return { error: 'bad poolIds' };
+    } else if (typeof src?.poolIds === 'string' && src.poolIds) {
+      poolIds = src.poolIds.split(',').map((x) => x.trim()).filter(Boolean);
+      if (poolIds.length > 64 || !poolIds.every(isPubkeyish)) return { error: 'bad poolIds' };
+    }
+    return { owner, mint, poolIds };
+  }
+
+  app.get('/api/orca/claimable', async (req, res) => {
+    const scope = claimScope(req.query);
+    if (scope.error) return res.status(400).json({ success: false, error: scope.error });
+    try {
+      const data = await getClaimable(scope);
+      res.json({ success: true, ...data });
+    } catch (error) {
+      res.status(error.status || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/orca/claim/build', async (req, res) => {
+    const scope = claimScope(req.body);
+    if (scope.error) return res.status(400).json({ success: false, error: scope.error });
+    const maxTxs = Math.min(16, Math.max(1, Number(req.body?.maxTxs) || DEFAULT_MAX_TXS_PER_ROUND));
+    try {
+      const data = await buildClaimTransactions({ ...scope, maxTxs });
+      res.json({ success: true, ...data });
+    } catch (error) {
+      res.status(error.status || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/orca/claim/send', async (req, res) => {
+    try {
+      const signedTxs = Array.isArray(req.body?.signedTxs) ? req.body.signedTxs.map(String) : [];
+      const lastValidBlockHeight = Number.isFinite(Number(req.body?.lastValidBlockHeight)) ? Number(req.body.lastValidBlockHeight) : null;
+      const data = await sendSignedClaims({ signedTxs, lastValidBlockHeight });
+      res.json({ success: true, ...data });
+    } catch (error) {
+      res.status(error.status || 500).json({ success: false, error: error.message });
     }
   });
 

@@ -50,6 +50,7 @@ import { getTokenInfo, getUsdPrice } from './tokenInfoService.js';
 import { sweepAllTokensToDestination, sweepSolToDestination } from './walletHelpers.js';
 import {
   ORCA_CONFIG_AUTHORITY,
+  ORCA_CONFIG_AUTHORITIES,
   DEFAULT_WHIRLPOOLS_CONFIG,
   FALLBACK_ORCA_FEE_TIERS,
   FORCED_QUOTES,
@@ -99,6 +100,8 @@ const DEPOSIT_SLIPPAGE = Percentage.fromFraction(1, 100);
 let __connectionFactoryOverride = null;
 export function setConnectionFactoryForTests(fn) { __connectionFactoryOverride = fn; }
 export function resetTestFactories() { __connectionFactoryOverride = null; }
+
+export { makeConnection as getOrcaConnection, programAccounts as getWhirlpoolProgramAccounts };
 
 function makeConnection() {
   if (__connectionFactoryOverride) return __connectionFactoryOverride();
@@ -157,19 +160,26 @@ async function programAccounts(connection, filters, dataSlice) {
   return connection.getProgramAccounts(PROGRAM_ID, cfg);
 }
 
-/** Every WhirlpoolsConfig whose fee authority is `authority`, with pool counts. */
-export async function listWhirlpoolsConfigs(authority = ORCA_CONFIG_AUTHORITY) {
-  return cached(`configs:${authority}`, 10 * 60_000, async () => {
+/**
+ * Every WhirlpoolsConfig whose fee authority is `authority` (one key or a
+ * list; defaults to the current and legacy app authorities).
+ */
+export async function listWhirlpoolsConfigs(authority = ORCA_CONFIG_AUTHORITIES) {
+  const authorities = [...new Set(Array.isArray(authority) ? authority : [authority])];
+  return cached(`configs:${authorities.join(',')}`, 10 * 60_000, async () => {
     const connection = makeConnection();
-    const rows = await programAccounts(connection, [
-      { dataSize: WHIRLPOOLS_CONFIG_SIZE },
-      { memcmp: { offset: 8, bytes: authority } },
-    ]);
-    const configs = rows.map((r) => ({
-      address: r.pubkey.toBase58(),
-      ...decodeWhirlpoolsConfig(r.account.data),
-    }));
-    return configs;
+    const seen = new Map();
+    for (const auth of authorities) {
+      const rows = await programAccounts(connection, [
+        { dataSize: WHIRLPOOLS_CONFIG_SIZE },
+        { memcmp: { offset: 8, bytes: auth } },
+      ]);
+      for (const r of rows) {
+        const address = r.pubkey.toBase58();
+        if (!seen.has(address)) seen.set(address, { address, ...decodeWhirlpoolsConfig(r.account.data) });
+      }
+    }
+    return [...seen.values()];
   });
 }
 

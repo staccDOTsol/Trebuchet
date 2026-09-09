@@ -23,10 +23,17 @@ export const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 export const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 // The wallet that owns (is fee authority of) the WhirlpoolsConfigs this app
-// launches on. Every config whose fee_authority is this key is offered in
-// the advanced picker; DEFAULT_WHIRLPOOLS_CONFIG is the one with the most
-// live pools at the time this path shipped.
-export const ORCA_CONFIG_AUTHORITY = 'WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb';
+// launches on. Every config whose fee_authority is one of these keys is
+// offered in the advanced picker; DEFAULT_WHIRLPOOLS_CONFIG is the one with
+// the most live pools at the time this path shipped.
+//
+// The configs were created under WzMaL… and every authority on them (fee,
+// collect-protocol-fees, reward-emissions-super, config-extension, token
+// badge) is being moved to 58Agx… with scripts/orca-set-authorities.mjs.
+// Both are recognised so enumeration works before and after the move.
+export const ORCA_CONFIG_AUTHORITY = '58AgxZtxYkAzgcGktVyajR7zYi9k4kJmaG94XvwpSasK';
+export const ORCA_CONFIG_AUTHORITY_LEGACY = 'WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb';
+export const ORCA_CONFIG_AUTHORITIES = Object.freeze([ORCA_CONFIG_AUTHORITY, ORCA_CONFIG_AUTHORITY_LEGACY]);
 export const DEFAULT_WHIRLPOOLS_CONFIG =
   process.env.ORCA_WHIRLPOOLS_CONFIG || '12yTE48QR6bGK4EMcyY8XsARbX1TRTEbwHYSuuxR1Hp8';
 

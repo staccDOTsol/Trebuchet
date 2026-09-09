@@ -218,6 +218,27 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
 .xhead p{margin:8px 0 0;color:var(--muted);font-size:13px}
 .xhead .btn{margin-left:auto;flex:0 0 auto;min-height:40px;padding:0 14px;border-radius:999px;font-size:13px}
 .xhead .btn i{margin-right:6px}
+.wbtn{display:inline-flex;align-items:center;gap:8px}
+.wbtn img{width:18px;height:18px;border-radius:5px}
+.wlist{display:grid;gap:8px;margin-top:10px}
+.wlist .btn{display:flex;align-items:center;gap:10px;justify-content:flex-start;min-height:48px}
+.wlist .btn img{width:22px;height:22px;border-radius:6px}
+.claimhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.claimhead .tot{font-family:Unbounded,sans-serif;font-weight:900;font-size:22px;color:var(--gold)}
+.claimhead .btn{margin-left:auto}
+.cl{background:var(--well);border:1px solid var(--line-2);border-radius:16px;padding:12px;margin-top:10px}
+.cl .hd{display:flex;align-items:center;gap:10px}
+.cl .hd img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:linear-gradient(135deg,#ff7a3d,#ffd166)}
+.cl .hd .nm{font-family:Unbounded,sans-serif;font-weight:700;font-size:14px}
+.cl .hd .sub{color:var(--muted);font-size:12px}
+.cl .hd .btn{margin-left:auto;min-height:38px;padding:0 12px;font-size:12.5px}
+.cl .pr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px 10px;align-items:center;padding:8px 0;border-top:1px solid var(--line-2);font-size:12.5px}
+.cl .pr:first-of-type{border-top:0}
+.cl .pr .q{font-weight:800}.cl .pr .q span{color:var(--muted);font-weight:500;font-family:"JetBrains Mono",monospace;font-size:11px}
+.cl .pr .amt{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--muted);text-align:right;overflow-wrap:anywhere}
+.cl .pr .amt b{color:var(--text);font-weight:700}
+.cl .pr .btn{min-height:34px;padding:0 10px;font-size:12px;border-radius:9px}
+.cl .pr .btn:disabled{opacity:.4}
 .feedstat{padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-size:12.5px;font-family:"JetBrains Mono",monospace}
 .feedstat.bad{border-color:var(--bad-line);color:var(--bad-fg)}
 .lc{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:16px}
@@ -255,6 +276,7 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
     <div class="tabs">
       <button class="tab is-active" data-tab="explore"><i class="fas fa-compass" style="margin-right:6px"></i>Explore</button>
       <button class="tab" data-tab="launch"><i class="fas fa-rocket" style="margin-right:6px"></i>Launch</button>
+      <button class="tab" data-tab="claim"><i class="fas fa-coins" style="margin-right:6px"></i>Claim</button>
     </div>
   </div></div>
 
@@ -410,6 +432,29 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
     <div id="tokenPageBar" class="hidden" style="display:flex;gap:8px;align-items:center"><a href="/" class="btn" style="display:inline-flex;align-items:center;text-decoration:none"><i class="fas fa-arrow-left" style="margin-right:6px"></i>All launches</a><span class="note mono" id="tokenPageNote"></span></div>
     <div id="feedMsg" class="feedstat">scanning the config…</div>
     <div id="feed" style="display:grid;gap:14px"></div>
+    <div class="card hidden" id="tokenClaimCard">
+      <div class="card-h"><h2>Creator fees</h2><span class="pill right hidden" id="tokenClaimPill"></span></div>
+      <p class="hint">Launched this token? Connect the wallet that holds the locked positions to collect the swap fees they earned.</p>
+      <div id="tokenClaimConnect"></div>
+      <div id="tokenClaimPanel"></div>
+      <div id="tokenClaimMsg"></div>
+    </div>
+  </section>
+
+  <!-- ============================ CLAIM ============================ -->
+  <section id="tab-claim" class="screen hidden">
+    <div class="xhead">
+      <div style="min-width:0"><h1>Claim fees</h1><p>Locked positions keep earning swap fees forever. Connect the wallet that received them and collect.</p></div>
+      <button id="btnRefreshClaims" class="btn hidden"><i class="fas fa-sync" id="claimSpin"></i>Refresh</button>
+    </div>
+    <div class="card hot" id="card-claim">
+      <div class="card-h"><h2>Your locked positions</h2><span class="pill right hidden" id="claimWalletPill"></span></div>
+      <p class="hint" id="claimHint">Phantom, Solflare, Backpack or any wallet-standard wallet works, on desktop or in the wallet's in-app browser. The fees are already yours — you only sign the collect transactions and pay their network fee.</p>
+      <div id="claimConnect"></div>
+      <div id="claimPanel"></div>
+      <div id="claimMsg"></div>
+    </div>
+    <p class="foot">Fees are quoted live from the pools · one signature approves a batch of collect transactions · nothing is taken by this app.</p>
   </section>
 
   <!-- Dock -->

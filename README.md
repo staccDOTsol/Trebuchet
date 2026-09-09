@@ -16,8 +16,9 @@ price), fund a throwaway wallet, and press Launch:
 1. mints the SPL token (Metaplex metadata; mint / freeze / update
    authorities renounced);
 2. creates one **Orca Whirlpool per quote** on our WhirlpoolsConfig
-   (`12yTE48QR6bGK4EMcyY8XsARbX1TRTEbwHYSuuxR1Hp8`, fee authority
-   `WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb`; fee tiers are read live
+   (`12yTE48QR6bGK4EMcyY8XsARbX1TRTEbwHYSuuxR1Hp8`, authorities held by
+   `58AgxZtxYkAzgcGktVyajR7zYi9k4kJmaG94XvwpSasK`, moved there from the
+   creating wallet with `scripts/orca-set-authorities.mjs`; fee tiers are read live
    from the config, 1% by default) — cheap dynamic tick arrays, no
    per-pool dynamic-fee machinery;
 3. splits each pool's share of the supply into a **ladder** of stacked

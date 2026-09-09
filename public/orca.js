@@ -234,8 +234,10 @@
     $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b.getAttribute('data-tab') === name));
     $('#tab-launch').classList.toggle('hidden', name !== 'launch');
     $('#tab-explore').classList.toggle('hidden', name !== 'explore');
+    $('#tab-claim').classList.toggle('hidden', name !== 'claim');
     if (name === 'explore') loadFeed();
-    if (!tokenPageMint) { try { history.replaceState(null, '', name === 'launch' ? '#launch' : '#'); } catch (_) { /* fine */ } }
+    if (name === 'claim') claimUi.main.open();
+    if (!tokenPageMint) { try { history.replaceState(null, '', name === 'launch' ? '#launch' : name === 'claim' ? '#claim' : '#'); } catch (_) { /* fine */ } }
     renderDock();
   }
   $$('.tab[data-tab]').forEach((btn) => btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab'))));
@@ -1065,6 +1067,8 @@
       document.title = `${launch.name || launch.symbol} · FireFun`;
       $('#feedMsg').textContent = `${launch.pools.length} locked pool${launch.pools.length === 1 ? '' : 's'} · launched ${new Date(launch.launchedAt * 1000).toLocaleString()}`;
       $('#feed').innerHTML = renderLaunchCard(launch, 0);
+      $('#tokenClaimCard').classList.remove('hidden');
+      claimUi.token.open();
     } catch (err) {
       $('#feedMsg').className = 'feedstat bad';
       $('#feedMsg').textContent = err.status === 404 ? 'No locked pools for this token on our config.' : describeError(err);
@@ -1097,6 +1101,276 @@
       <div class="pools">${pools}</div>
     </div>`;
   }
+
+
+  // ---------------------------------------------------------------------
+  // Creator fee claims — browser wallet (wallet-standard) + server-built txs
+  // ---------------------------------------------------------------------
+
+  // Wallet-standard discovery needs no library: wallets announce themselves
+  // with a window event and we announce the app; whichever comes first wins.
+  const walletStd = (() => {
+    const wallets = [];
+    const listeners = new Set();
+    function register(...ws) {
+      for (const w of ws) {
+        if (!w || wallets.includes(w)) continue;
+        const chains = w.chains || [];
+        const f = w.features || {};
+        if (!chains.some((c) => String(c).startsWith('solana:'))) continue;
+        if (!f['standard:connect'] || !(f['solana:signTransaction'] || f['solana:signAndSendTransaction'])) continue;
+        wallets.push(w);
+      }
+      listeners.forEach((fn) => { try { fn(wallets); } catch (_) { /* ui */ } });
+    }
+    const apiObj = { register, get: () => wallets.slice(), on: (fn) => listeners.add(fn) };
+    try {
+      window.addEventListener('wallet-standard:register-wallet', (ev) => { try { ev.detail(apiObj); } catch (_) { /* wallet bug */ } });
+      const ready = new CustomEvent('wallet-standard:app-ready', { detail: apiObj });
+      window.dispatchEvent(ready);
+    } catch (_) { /* no wallets */ }
+    return apiObj;
+  })();
+
+  const connected = { wallet: null, account: null, address: null };
+  const claimListeners = new Set();
+  function notifyClaimUis() { claimListeners.forEach((fn) => { try { fn(); } catch (_) { /* ui */ } }); }
+
+  async function connectWallet(w, { silent = false } = {}) {
+    const out = await w.features['standard:connect'].connect(silent ? { silent: true } : undefined);
+    const acct = (out?.accounts || w.accounts || []).find((a) => (a.chains || []).some((c) => String(c).startsWith('solana:'))) || (out?.accounts || w.accounts || [])[0];
+    if (!acct) throw new Error('the wallet returned no Solana account');
+    connected.wallet = w; connected.account = acct; connected.address = acct.address;
+    try { localStorage.setItem('firefun.wallet', w.name); } catch (_) { /* optional */ }
+    if (w.features['standard:events']?.on) {
+      try {
+        w.features['standard:events'].on('change', (p) => {
+          if (p?.accounts && p.accounts.length === 0) disconnectWallet();
+          else if (p?.accounts?.[0] && p.accounts[0].address !== connected.address) { connected.account = p.accounts[0]; connected.address = p.accounts[0].address; notifyClaimUis(); }
+        });
+      } catch (_) { /* optional */ }
+    }
+    notifyClaimUis();
+    return connected;
+  }
+  async function disconnectWallet() {
+    try { await connected.wallet?.features?.['standard:disconnect']?.disconnect?.(); } catch (_) { /* fine */ }
+    connected.wallet = null; connected.account = null; connected.address = null;
+    try { localStorage.removeItem('firefun.wallet'); } catch (_) { /* optional */ }
+    notifyClaimUis();
+  }
+  // Silent reconnect to the wallet used last time, once it announces itself.
+  (function autoReconnect() {
+    let name = null;
+    try { name = localStorage.getItem('firefun.wallet'); } catch (_) { /* optional */ }
+    if (!name) return;
+    const tryIt = (ws) => {
+      const w = ws.find((x) => x.name === name);
+      if (w && !connected.wallet) connectWallet(w, { silent: true }).catch(() => { /* user will click */ });
+    };
+    tryIt(walletStd.get());
+    walletStd.on(tryIt);
+  })();
+
+  function b64ToBytes(b64) { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  function bytesToB64(bytes) { let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
+
+  // Sign a batch: one wallet prompt for the lot where supported. Returns
+  // { signed: [b64], sent: [signature] } — a signAndSend-only wallet sends
+  // through its own RPC and we just confirm.
+  async function signClaimBatch(txs) {
+    const w = connected.wallet;
+    const account = connected.account;
+    const inputs = txs.map((t) => ({ transaction: b64ToBytes(t.tx), account, chain: 'solana:mainnet' }));
+    const signer = w.features['solana:signTransaction'];
+    if (signer) {
+      let outs;
+      try { outs = await signer.signTransaction(...inputs); }
+      catch (err) {
+        if (inputs.length > 1 && /one|single|multiple|batch/i.test(String(err?.message || ''))) {
+          outs = [];
+          for (const inp of inputs) outs.push((await signer.signTransaction(inp))[0]);
+        } else throw err;
+      }
+      return { signed: outs.map((o) => bytesToB64(o.signedTransaction)) };
+    }
+    const sas = w.features['solana:signAndSendTransaction'];
+    const sent = [];
+    for (const inp of inputs) {
+      const [o] = await sas.signAndSendTransaction(inp);
+      sent.push(b58encode(o.signature));
+    }
+    return { sent };
+  }
+
+  function fmtAmt(n) {
+    if (n == null || !Number.isFinite(n)) return '—';
+    if (n === 0) return '0';
+    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    if (n >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    return n.toLocaleString(undefined, { maximumSignificantDigits: 4 });
+  }
+
+  // One claim UI = a container (the Claim tab or a token page card) with a
+  // scope (all launches, or one mint).
+  function makeClaimUi({ connectSel, panelSel, msgSel, pillSel, refreshSel = null, spinSel = null, scopeMint = null }) {
+    let data = null;
+    let busy = false;
+    let opened = false;
+    let loading = null;
+
+    function pill(text, kind) { if ($(pillSel)) setPill(pillSel, text, kind); }
+
+    function renderConnect() {
+      const c = $(connectSel);
+      if (!c) return;
+      if (connected.address) {
+        c.innerHTML = `<div class="row"><span class="mono" style="font-size:13px"><i class="fas fa-wallet" style="color:var(--gold);margin-right:6px"></i>${esc(short(connected.address, 6))} <span class="note">· ${esc(connected.wallet?.name || '')}</span></span><button class="btn sm" data-act="disconnect">Disconnect</button></div>`;
+        return;
+      }
+      const ws = walletStd.get();
+      if (ws.length === 0) {
+        c.innerHTML = `<div class="msg warn">No Solana wallet found in this browser. Install <a target="_blank" rel="noopener" href="https://phantom.app">Phantom</a> or <a target="_blank" rel="noopener" href="https://solflare.com">Solflare</a>, or open <span class="mono">${esc(location.host)}</span> inside your wallet app's browser on mobile.</div>`;
+        return;
+      }
+      c.innerHTML = `<div class="wlist">${ws.map((w, i) => `<button class="btn" data-act="connect" data-i="${i}">${w.icon ? `<img src="${esc(w.icon)}" alt="">` : '<i class="fas fa-wallet"></i>'}Connect ${esc(w.name)}</button>`).join('')}</div>`;
+    }
+
+    function renderPanel() {
+      const el = $(panelSel);
+      if (!el) return;
+      if (!connected.address) { el.innerHTML = ''; pill('', ''); return; }
+      if (!data) { el.innerHTML = '<div class="feedstat" style="margin-top:12px">reading your positions…</div>'; return; }
+      const launches = data.launches;
+      pill(`${data.totals.positions} position${data.totals.positions === 1 ? '' : 's'}`, data.totals.claimablePositions ? 'ok' : '');
+      if (launches.length === 0) {
+        el.innerHTML = `<div class="msg" style="margin-top:12px">${scopeMint ? 'This wallet holds no locked positions for this token.' : 'This wallet holds no FireFun positions. Launch one, or connect the wallet you sent the positions to.'}</div>`;
+        return;
+      }
+      const claimableAll = data.totals.claimablePositions;
+      const head = `<div class="claimhead" style="margin-top:14px"><div><div class="k">Claimable now</div><div class="tot">${fmtUsd(data.totals.usd)}</div><div class="note">${claimableAll} of ${data.totals.positions} positions have fees · ${launches.length} launch${launches.length === 1 ? '' : 'es'}</div></div><button class="btn grad" data-act="claim" ${claimableAll && !busy ? '' : 'disabled'}><i class="fas fa-coins" style="margin-right:8px"></i>${busy ? 'Claiming…' : 'Claim all'}</button></div>`;
+      const cards = launches.map((L) => {
+        const rows = L.pools.map((p) => `<div class="pr">
+          <div class="q">${esc(p.quoteSymbol)} <span>· ${p.claimablePositions}/${p.positions.length} bands</span></div>
+          <div class="amt"><b>${fmtAmt(p.feeQuoteUi)}</b> ${esc(p.quoteSymbol)} + <b>${fmtAmt(p.feeTokenUi)}</b> ${esc(L.symbol)}<br>${fmtUsd(p.usd)}</div>
+          <button class="btn" data-act="claim" data-mint="${esc(L.tokenMint)}" data-pool="${esc(p.poolId)}" ${p.claimablePositions && !busy ? '' : 'disabled'}>Claim</button>
+        </div>`).join('');
+        const avatar = L.imageUrl ? `<img src="${esc(L.imageUrl)}" alt="">` : '<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">';
+        return `<div class="cl">
+          <div class="hd">${avatar}<div style="min-width:0"><div class="nm">${esc(L.name || L.symbol)} <span class="note mono">${esc(L.symbol)}</span></div><div class="sub">${fmtUsd(L.totals.usd)} claimable · ${L.pools.length} pool${L.pools.length === 1 ? '' : 's'} · <a href="/token/${esc(L.tokenMint)}">token page</a></div></div>${scopeMint ? '' : `<button class="btn" data-act="claim" data-mint="${esc(L.tokenMint)}" ${L.totals.claimablePositions && !busy ? '' : 'disabled'}>Claim all</button>`}</div>
+          ${rows}
+        </div>`;
+      }).join('');
+      el.innerHTML = head + cards;
+    }
+
+    async function load() {
+      if (!connected.address) { data = null; renderPanel(); return; }
+      if (loading) return loading;
+      if (spinSel) $(spinSel)?.classList.add('spin');
+      loading = (async () => {
+        try {
+          const q = new URLSearchParams({ owner: connected.address });
+          if (scopeMint) q.set('mint', scopeMint);
+          data = await api(`/api/orca/claimable?${q}`);
+          setMsg(msgSel, '');
+        } catch (err) {
+          data = null;
+          setMsg(msgSel, esc(describeError(err)), 'bad');
+        } finally {
+          loading = null;
+          if (spinSel) $(spinSel)?.classList.remove('spin');
+          renderPanel();
+        }
+      })();
+      return loading;
+    }
+
+    async function claim({ mint = scopeMint, poolIds = null } = {}) {
+      if (busy || !connected.wallet) return;
+      busy = true; renderPanel();
+      let landed = 0; let failed = 0; let rounds = 0;
+      const sigs = [];
+      try {
+        for (;;) {
+          rounds++;
+          if (rounds > 60) break;
+          setMsg(msgSel, `<span class="spin" style="margin-right:6px"><i class="fas fa-circle-notch"></i></span> Building claim transactions${landed ? ` · ${landed} landed` : ''}…`, 'warn');
+          const body = { owner: connected.address, maxTxs: 8 };
+          if (mint) body.mint = mint;
+          if (poolIds) body.poolIds = poolIds;
+          const built = await api('/api/orca/claim/build', { body });
+          if (built.txs.length === 0) break;
+          const n = built.txs.reduce((s, t) => s + t.positions, 0);
+          setMsg(msgSel, `<span class="spin" style="margin-right:6px"><i class="fas fa-circle-notch"></i></span> Approve ${built.txs.length} transaction${built.txs.length === 1 ? '' : 's'} in ${esc(connected.wallet.name)} (${n} position${n === 1 ? '' : 's'}${built.remainingPositions ? `, ${built.remainingPositions} more after this batch` : ''})…`, 'warn');
+          const out = await signClaimBatch(built.txs);
+          if (out.signed) {
+            setMsg(msgSel, `<span class="spin" style="margin-right:6px"><i class="fas fa-circle-notch"></i></span> Sending ${out.signed.length} transaction${out.signed.length === 1 ? '' : 's'}…`, 'warn');
+            const r = await api('/api/orca/claim/send', { body: { signedTxs: out.signed, lastValidBlockHeight: built.lastValidBlockHeight } });
+            for (const row of r.results) {
+              if (row.ok) { landed++; sigs.push(row.signature); }
+              else { failed++; if (row.signature) sigs.push(row.signature); if (!row.expired) throw new Error(row.error || 'a claim transaction failed'); }
+            }
+          } else {
+            landed += out.sent.length; sigs.push(...out.sent);
+            await new Promise((r) => setTimeout(r, 4000));
+          }
+          if (!built.remainingPositions) break;
+        }
+        const links = sigs.slice(-6).map((s) => `<a class="mono" target="_blank" rel="noopener" href="https://solscan.io/tx/${esc(s)}">${esc(short(s, 5))}</a>`).join(' · ');
+        setMsg(msgSel, landed ? `<strong>Claimed.</strong> ${landed} transaction${landed === 1 ? '' : 's'} landed${failed ? `, ${failed} expired and can be retried` : ''}. ${links}` : 'Nothing to claim right now.', landed ? 'ok' : '');
+      } catch (err) {
+        const m = describeError(err);
+        setMsg(msgSel, /reject|denied|cancel/i.test(m) ? 'Cancelled in the wallet. Nothing was sent.' : esc(m), /reject|denied|cancel/i.test(m) ? 'warn' : 'bad');
+      } finally {
+        busy = false;
+        data = null;
+        renderPanel();
+        load();
+      }
+    }
+
+    function bind() {
+      for (const sel of [connectSel, panelSel]) {
+        on(sel, 'click', async (ev) => {
+          const b = ev.target.closest('[data-act]');
+          if (!b) return;
+          ev.preventDefault();
+          const act = b.getAttribute('data-act');
+          if (act === 'connect') {
+            const w = walletStd.get()[Number(b.getAttribute('data-i'))];
+            if (!w) return;
+            try { await connectWallet(w); } catch (err) { setMsg(msgSel, esc(err?.message || 'wallet refused the connection'), 'bad'); }
+          } else if (act === 'disconnect') {
+            await disconnectWallet();
+          } else if (act === 'claim') {
+            const mint = b.getAttribute('data-mint') || scopeMint || null;
+            const pool = b.getAttribute('data-pool');
+            claim({ mint, poolIds: pool ? [pool] : null });
+          }
+        });
+      }
+      if (refreshSel) on(refreshSel, 'click', () => { data = null; renderPanel(); load(); });
+      walletStd.on(() => { if (!connected.address) renderConnect(); });
+      claimListeners.add(() => { renderConnect(); data = null; renderPanel(); if (opened) load(); if (refreshSel) $(refreshSel)?.classList.toggle('hidden', !connected.address); });
+    }
+
+    function open() {
+      opened = true;
+      renderConnect();
+      if (refreshSel) $(refreshSel)?.classList.toggle('hidden', !connected.address);
+      data = null; renderPanel();
+      load();
+    }
+
+    bind();
+    return { open, load };
+  }
+
+  const claimUi = {
+    main: makeClaimUi({ connectSel: '#claimConnect', panelSel: '#claimPanel', msgSel: '#claimMsg', pillSel: '#claimWalletPill', refreshSel: '#btnRefreshClaims', spinSel: '#claimSpin' }),
+    token: makeClaimUi({ connectSel: '#tokenClaimConnect', panelSel: '#tokenClaimPanel', msgSel: '#tokenClaimMsg', pillSel: '#tokenClaimPill', scopeMint: tokenPageMint }),
+  };
 
   // ---------------------------------------------------------------------
   // Boot
@@ -1136,7 +1410,8 @@
     }
     renderWallet();
     renderTokenCreated();
-    if (!tokenPageMint && (location.hash === '#launch' || (state.wallet && !state.finish))) showTab('launch');
+    if (!tokenPageMint && location.hash === '#claim') showTab('claim');
+    else if (!tokenPageMint && (location.hash === '#launch' || (state.wallet && !state.finish))) showTab('launch');
     else showTab('explore');
     if (state.launch?.results?.length) {
       buildLaunchTree({ quotes: state.launch.results.map((r) => ({ mint: r.quoteMint, supplyPercent: r.supplyPercent })) });

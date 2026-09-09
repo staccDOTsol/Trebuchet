@@ -14,6 +14,9 @@
   const STORE_KEY = 'firefun.launch.v1';
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  // Bind without throwing if the element is missing (a stale cached page
+  // paired with a newer script must never abort the rest of this file).
+  const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); else console.warn('missing element', sel); };
 
   // ---------------------------------------------------------------------
   // State
@@ -234,7 +237,7 @@
     renderDock();
   }
   $$('.tab[data-tab]').forEach((btn) => btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab'))));
-  $('#btnStartLaunch').addEventListener('click', () => { showTab('launch'); window.scrollTo({ top: 0 }); });
+  on('#btnStartLaunch', 'click', () => { showTab('launch'); window.scrollTo({ top: 0 }); });
 
   // ---------------------------------------------------------------------
   // Meta (config, fee tiers, quotes)
@@ -448,7 +451,7 @@
     }).join('');
   }
 
-  $('#btnAddQuote').addEventListener('click', async () => {
+  on('#btnAddQuote', 'click', async () => {
     const mint = $('#customQuote').value.trim();
     if (!isPubkey(mint)) return setMsg('#quoteMsg', 'That is not a valid mint address.', 'bad');
     if (state.quotes[mint]) return setMsg('#quoteMsg', 'Already in the list.', 'warn');
@@ -466,14 +469,14 @@
     }
   });
 
-  $('#feeTier').addEventListener('change', () => { state.tickSpacing = Number($('#feeTier').value); persist(); updateGates(); });
-  $('#btnLoadConfig').addEventListener('click', async () => {
+  on('#feeTier', 'change', () => { state.tickSpacing = Number($('#feeTier').value); persist(); updateGates(); });
+  on('#btnLoadConfig', 'click', async () => {
     const addr = $('#configAddr').value.trim();
     if (!isPubkey(addr)) return;
     $('#configNote').textContent = 'loading…';
     try { await loadMeta(addr); } catch (err) { $('#configNote').textContent = err.message; }
   });
-  $('#btnListConfigs').addEventListener('click', async () => {
+  on('#btnListConfigs', 'click', async () => {
     const host = $('#configList');
     host.classList.remove('hidden');
     host.innerHTML = '<span class="note mono">scanning configs…</span>';
@@ -532,7 +535,7 @@
       URL.revokeObjectURL(url);
     }
   }
-  $('#tokLogo').addEventListener('change', async () => {
+  on('#tokLogo', 'change', async () => {
     const file = $('#tokLogo').files[0];
     logoBlob = null;
     if (!file) { $('#logoLabel').textContent = 'png / jpg / gif / webp'; return; }
@@ -575,7 +578,7 @@
     updateGates();
   }
 
-  $('#btnGenWallet').addEventListener('click', async () => {
+  on('#btnGenWallet', 'click', async () => {
     $('#btnGenWallet').disabled = true;
     try {
       const { wallet } = await api('/api/generate-wallet', { body: {} });
@@ -604,7 +607,7 @@
     renderWallet(); persist();
   }
 
-  $('#btnUseWallet').addEventListener('click', async () => {
+  on('#btnUseWallet', 'click', async () => {
     const secretRaw = $('#existingSecret').value.trim();
     const pk = $('#existingWallet').value.trim();
     try {
@@ -622,7 +625,7 @@
     }
   });
 
-  $('#btnLateSecret').addEventListener('click', () => {
+  on('#btnLateSecret', 'click', () => {
     try {
       const parsed = parseSecretKey($('#lateSecret').value);
       if (!parsed) throw new Error('Paste the secret key first.');
@@ -638,7 +641,7 @@
     }
   });
 
-  $('#btnRevealSecret').addEventListener('click', () => {
+  on('#btnRevealSecret', 'click', () => {
     const sec = $('#walletSecret');
     if (!state.wallet?.secretKeyB58) return;
     const hidden = sec.textContent.startsWith('•');
@@ -646,7 +649,7 @@
     sec.className = hidden ? 't lit' : 't dim';
     $('#btnRevealSecret').innerHTML = hidden ? '<i class="far fa-eye-slash"></i>' : '<i class="far fa-eye"></i>';
   });
-  $('#savedSecret').addEventListener('click', () => {
+  on('#savedSecret', 'click', () => {
     state.savedSecret = !state.savedSecret;
     $('#savedSecret').classList.toggle('on', state.savedSecret);
     persist(); updateGates();
@@ -684,9 +687,9 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
     return true;
   }
-  $('#btnForgetWallet').addEventListener('click', () => resetLauncher({ clearForm: false }));
-  $('#btnNewLaunch').addEventListener('click', () => resetLauncher({ clearForm: true }));
-  $('#btnNewLaunch2').addEventListener('click', () => resetLauncher({ clearForm: true }));
+  on('#btnForgetWallet', 'click', () => resetLauncher({ clearForm: false }));
+  on('#btnNewLaunch', 'click', () => resetLauncher({ clearForm: true }));
+  on('#btnNewLaunch2', 'click', () => resetLauncher({ clearForm: true }));
 
   // ---------------------------------------------------------------------
   // Funding
@@ -886,7 +889,7 @@
     setPill('#tokenState', 'minted', 'ok');
   }
 
-  $('#btnLaunch').addEventListener('click', async () => {
+  on('#btnLaunch', 'click', async () => {
     if (!state.estimate || state.launching) return;
     state.launching = true;
     setMsg('#launchMsg', '');
@@ -957,7 +960,7 @@
   // Finish
   // ---------------------------------------------------------------------
 
-  $('#destWallet').addEventListener('input', () => { state.destWallet = $('#destWallet').value.trim(); persist(); updateGates(); });
+  on('#destWallet', 'input', () => { state.destWallet = $('#destWallet').value.trim(); persist(); updateGates(); });
 
   function onFinishEvent(ev) {
     switch (ev.stage) {
@@ -972,7 +975,7 @@
     }
   }
 
-  $('#btnFinish').addEventListener('click', async () => {
+  on('#btnFinish', 'click', async () => {
     const dest = $('#destWallet').value.trim();
     if (!isPubkey(dest) || state.finishing) return;
     if (!confirm(`Send every locked position, the un-pooled tokens and the leftover SOL to\n\n${dest}\n\nThis cannot be undone. Double-check the address.`)) return;
@@ -1044,7 +1047,7 @@
     clearTimeout(feedTimer);
     feedTimer = setTimeout(() => { if (tab === 'explore') loadFeed(); }, 60_000);
   }
-  $('#btnRefreshFeed').addEventListener('click', loadFeed);
+  on('#btnRefreshFeed', 'click', loadFeed);
 
   async function loadTokenPage() {
     $('#tokenPageBar').classList.remove('hidden');

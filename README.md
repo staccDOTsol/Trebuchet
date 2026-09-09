@@ -45,6 +45,21 @@ live price, market cap and per-pool lock status.
 The config's protocol fee must be at Orca's 25% maximum; launches on a
 config set lower are refused.
 
+## Pairs: leveraged longs and shorts on anything (`programs/pairs`)
+
+A native Solana program, built from SPL `binary-option` + `binary-oracle-pair`,
+that turns any token into a **fully collateralized long/short pool**: every
+LONG + SHORT pair is backed by one unit of collateral, settlement on a
+`[floor, cap]` price range makes the position leveraged (a ±10% range is
+~10x from the midpoint, loss capped at the premium), and resting offers are
+the on-chain order book — short a memecoin the moment there is a
+counterparty. Settlement is permissionless from an Orca Whirlpool (so every
+FireFun token qualifies) or by a signer; a per-market funding rate accrues
+from mark vs index and is paid at settlement, and markets roll epoch to
+epoch to stay always-on. Design, instruction reference and the honest
+limits are in [`programs/pairs/README.md`](programs/pairs/README.md); the
+byte-exact JS client is `pairsClient.js`.
+
 Server code: `orcaLpPlan.js` (pure planning + account decoders, unit
 tested), `orcaLpService.js` (Whirlpools SDK), `orcaRoutes.js`
 (`/api/orca/*`), `server.js` (wallets, token mint, recovery, RPC settings).

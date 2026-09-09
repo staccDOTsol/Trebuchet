@@ -17,3 +17,7 @@ repo.zip
 _tutorial/
 test/e2e/videos/
 /apiSession.secret
+
+# Solana program build output and deploy keypairs (programs/)
+/programs/target/
+/programs/keys/

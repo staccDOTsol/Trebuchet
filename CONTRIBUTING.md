@@ -32,6 +32,16 @@ npm run check:syntax     # syntax-only
 npm audit --audit-level=critical  # dependency audit
 ```
 
+The on-chain program under `programs/` has its own job
+(`pairs.yml`): rustfmt, clippy, unit tests and the SBF integration tests.
+Locally, with the Anza toolchain installed:
+
+```bash
+cd programs
+cargo test -p trebuchet-pairs --lib
+cargo test-sbf --manifest-path pairs/Cargo.toml
+```
+
 Opt-in mainnet smoke tests:
 
 ```bash

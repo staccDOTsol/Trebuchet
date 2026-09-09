@@ -1,0 +1,54 @@
+name: Pairs program
+
+on:
+  push:
+    paths:
+      - "programs/**"
+      - "pairsClient.js"
+      - "test/pairs-client.test.mjs"
+      - ".github/workflows/pairs.yml"
+  pull_request:
+    paths:
+      - "programs/**"
+      - "pairsClient.js"
+      - "test/pairs-client.test.mjs"
+      - ".github/workflows/pairs.yml"
+
+jobs:
+  program:
+    name: Build and test (SBF)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: programs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Anza toolchain
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: programs
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p trebuchet-pairs --all-targets -- -D warnings
+      - run: cargo test -p trebuchet-pairs --lib
+      - run: cargo test-sbf --manifest-path pairs/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trebuchet_pairs.so
+          path: programs/target/deploy/trebuchet_pairs.so
+
+  client:
+    name: JS client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: node --test test/pairs-client.test.mjs

@@ -77,3 +77,36 @@ test('splash debug endpoint is opt-in only', () => {
   assert.ok(gateStart >= 0, 'splash debug env gate missing');
   assert.ok(routeStart > gateStart, 'splash debug route must be inside the env-gated block');
 });
+
+test('public API allowlist covers exactly what the FireFun UI calls', async () => {
+  const { isPublicApiRoute } = await import('../serverMiddleware.js');
+  const ui = read('public/orca.js') + read('public/api.js');
+  const called = new Set([...ui.matchAll(/\/api\/([a-zA-Z0-9_/-]+)/g)].map((m) => `/${m[1]}`));
+  assert.ok(called.size >= 10, 'expected the UI to call several /api routes');
+  for (const path of called) {
+    if (path === '/session') continue; // handed out before the allowlist runs
+    const ok = isPublicApiRoute('GET', path) || isPublicApiRoute('POST', path);
+    assert.ok(ok, `UI calls ${path} but the public allowlist blocks it`);
+  }
+  // Legacy operator endpoints must stay unreachable on the public site.
+  for (const [method, path] of [
+    ['GET', '/pending-wallets'],
+    ['POST', '/pending-wallets/reveal'],
+    ['POST', '/secret-pin/unlock'],
+    ['POST', '/rpc-config/select'],
+    ['GET', '/server-logs'],
+    ['GET', '/launch-journals'],
+    ['POST', '/find-funder'],
+    ['GET', '/generate-vanity-wallet-stream'],
+    ['POST', '/check-balance-detailed'],
+    ['GET', '/_splash-debug'],
+  ]) {
+    assert.equal(isPublicApiRoute(method, path), false, `${method} ${path} must be blocked`);
+  }
+  assert.equal(isPublicApiRoute('GET', '/orca/token/So11111111111111111111111111111111111111112'), true);
+  const server = read('server.js');
+  assert.ok(
+    server.indexOf("app.use('/api', apiSessionMiddleware)") < server.indexOf("app.use('/api', publicApiAllowlistMiddleware)"),
+    'allowlist must be mounted right after the session middleware',
+  );
+});

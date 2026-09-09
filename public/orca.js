@@ -651,20 +651,42 @@
     $('#savedSecret').classList.toggle('on', state.savedSecret);
     persist(); updateGates();
   });
-  $('#btnForgetWallet').addEventListener('click', () => {
+  // Reset the launcher for a fresh run. The old launch wallet stays in the
+  // server's recovery list; pools and locks are on chain and unaffected.
+  function resetLauncher({ clearForm }) {
     if (state.launch && !state.finish) {
-      if (!confirm('This wallet has pools launched but not yet handed off. Start over anyway? (The wallet stays in the recovery list.)')) return;
+      if (!confirm('This wallet has pools launched but not yet handed off. Start over anyway? (The wallet stays in the recovery list.)')) return false;
+    } else if (state.wallet && !state.launch && (lastBalance || 0) > 0.001) {
+      if (!confirm(`This launch wallet still holds ${(lastBalance || 0).toFixed(3)} SOL. Start over anyway? (It stays in the recovery list.)`)) return false;
     }
     state.wallet = null; state.token = null; state.launch = null; state.finish = null; state.savedSecret = false;
+    state.launching = false; state.finishing = false; state.estimate = null;
     lastBalance = null;
+    stopProgressPolling();
     stashSecret();
     needSecret(false);
     $('#launchProg').innerHTML = ''; $('#launchResults').classList.add('hidden'); $('#finishProg').innerHTML = ''; $('#finishResults').classList.add('hidden');
     $('#tokenCreated').classList.add('hidden'); setMsg('#launchMsg', ''); setMsg('#finishMsg', '');
     setPill('#tokenState', ''); setPill('#launchState', ''); setPill('#finishState', '');
     ['#tokName', '#tokSymbol', '#tokSupply', '#tokDesc', '#tokLogo'].forEach((s) => { $(s).disabled = false; });
+    if (clearForm) {
+      $('#tokName').value = ''; $('#tokSymbol').value = ''; $('#tokDesc').value = ''; $('#tokLogo').value = '';
+      $('#tokSupply').value = '1000000000'; $('#tokMcap').value = '10000'; $('#destWallet').value = ''; state.destWallet = '';
+      logoBlob = null; $('#logoLabel').textContent = 'png / jpg / gif / webp';
+      state.customQuotes = [];
+      for (const [mint, q] of Object.entries(state.quotes)) { if (q.custom) delete state.quotes[mint]; else if (!q.forced) q.on = q.info?.symbol === 'SOL'; }
+      applyDefaultSplit();
+      renderQuotes();
+      renderImplied();
+    }
     renderWallet(); persist();
-  });
+    showTab('launch');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return true;
+  }
+  $('#btnForgetWallet').addEventListener('click', () => resetLauncher({ clearForm: false }));
+  $('#btnNewLaunch').addEventListener('click', () => resetLauncher({ clearForm: true }));
+  $('#btnNewLaunch2').addEventListener('click', () => resetLauncher({ clearForm: true }));
 
   // ---------------------------------------------------------------------
   // Funding
@@ -726,6 +748,8 @@
     $('#btnLaunchLabel').textContent = state.launching ? 'Launching…' : launched ? 'Locked forever' : resumable ? 'Resume launch' : 'Launch';
     $('#card-launch').className = `card${launched ? ' ok' : (ready || resumable) ? ' ready' : ''}`;
 
+    $('#btnNewLaunch').classList.toggle('hidden', !launched);
+    $('#btnNewLaunch2').classList.toggle('hidden', !state.finish);
     $('#btnFinish').disabled = !(launched && isPubkey($('#destWallet').value) && !state.finish && !state.finishing);
     $('#card-finish').className = `card${state.finish ? ' ok' : launched ? '' : ' dimmed'}`;
     $('#card-wallet').className = `card${hasWallet && state.savedSecret ? ' ok' : ''}`;
@@ -757,7 +781,8 @@
       k = 'Locked'; v = `${state.launch.results.length} pools · 100% LP is yours`; label = 'Send home'; active = true;
       action = () => { scrollToCard('#card-finish'); $('#destWallet').focus(); };
     } else {
-      dock.classList.add('hidden'); return;
+      k = 'Done'; v = `${state.launch.results.length} pools locked · handed off`; label = 'Launch another'; active = true;
+      action = () => resetLauncher({ clearForm: true });
     }
     dock.classList.remove('hidden');
     $('#dockK').textContent = k; $('#dockV').textContent = v;

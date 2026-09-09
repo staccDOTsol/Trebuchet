@@ -30,6 +30,7 @@
     quotes: {},            // mint -> { on, pct, info, forced, custom }
     customQuotes: [],
     tickSpacing: null,
+    ladderSteps: 10,
     config: null,
     estimate: null,
     launch: null,          // { results, plan, feeRate, tickSpacing }
@@ -51,6 +52,7 @@
         quotes: Object.fromEntries(Object.entries(state.quotes).map(([m, q]) => [m, { on: q.on, pct: q.pct }])),
         customQuotes: state.customQuotes,
         tickSpacing: state.tickSpacing,
+        ladderSteps: state.ladderSteps,
         config: state.config,
         launch: state.launch,
         finish: state.finish,
@@ -401,8 +403,10 @@
       renderImplied();
       persist();
       try {
-        const { plan, cost } = await api('/api/orca/estimate', { body: { quotes: currentPlan() } });
+        const { plan, cost } = await api('/api/orca/estimate', { body: { quotes: currentPlan(), ladderSteps: state.ladderSteps } });
         state.estimate = { plan, cost };
+        $('#ladderVal').textContent = `${state.ladderSteps} per pool`;
+        $('#ladderNote').textContent = `${plan.quotes.length} pools × ${state.ladderSteps} bands = ${cost.positionCount} locked positions · ~${cost.txCount} transactions · ~${cost.estMinutes} min · ${cost.totalSol} SOL`;
         $('#sumPools').textContent = plan.quotes.length;
         $('#sumPct').textContent = fmtPct(plan.totalPercent);
         $('#sumRem').textContent = fmtPct(plan.remainderPercent);
@@ -470,6 +474,7 @@
   });
 
   on('#feeTier', 'change', () => { state.tickSpacing = Number($('#feeTier').value); persist(); updateGates(); });
+  on('#ladder', 'input', () => { state.ladderSteps = Number($('#ladder').value); $('#ladderVal').textContent = `${state.ladderSteps} per pool`; refreshEstimate(); });
   on('#btnLoadConfig', 'click', async () => {
     const addr = $('#configAddr').value.trim();
     if (!isPubkey(addr)) return;
@@ -821,8 +826,7 @@
       const sym = esc(state.quotes[q.mint]?.info?.symbol || short(q.mint));
       rows.push(progRow(`p-${i}`, `Pool vs ${sym} — ${fmtPct(q.supplyPercent)} of supply`));
       rows.push(progRow(`p-${i}-pool`, 'create Whirlpool', true));
-      rows.push(progRow(`p-${i}-pos`, 'open single-sided position', true));
-      rows.push(progRow(`p-${i}-lock`, 'deposit + permanent lock', true));
+      rows.push(progRow(`p-${i}-pos`, `open + deposit + lock ${state.ladderSteps} ladder positions`, true));
     });
     $('#launchProg').innerHTML = rows.join('');
     if (state.token) progSet('p-token', 'done', acctLink(state.token.mint, short(state.token.mint)));
@@ -850,11 +854,11 @@
       case 'pool_create_start': progSet(`p-${i}`, 'running'); progSet(`p-${i}-pool`, 'running'); break;
       case 'pool_exists': progSet(`p-${i}`, 'running'); progSet(`p-${i}-pool`, 'done', acctLink(ev.poolId, 'exists')); break;
       case 'pool_create_done': progSet(`p-${i}-pool`, 'done', txLink(ev.txId)); break;
-      case 'position_open_start': progSet(`p-${i}-pos`, 'running'); break;
-      case 'position_open_done': progSet(`p-${i}-pos`, 'done', txLink(ev.txId)); break;
-      case 'deposit_lock_start': case 'lock_start': progSet(`p-${i}-pos`, 'done'); progSet(`p-${i}-lock`, 'running'); break;
-      case 'lock_exists': progSet(`p-${i}-pos`, 'done'); progSet(`p-${i}-lock`, 'done', 'already locked'); progSet(`p-${i}`, 'done'); break;
-      case 'lock_done': progSet(`p-${i}-lock`, 'done', txLink(ev.txId)); progSet(`p-${i}`, 'done'); break;
+      case 'position_open_start': progSet(`p-${i}-pos`, 'running', `${ev.bandIndex + 1}/${ev.bands} opening`); break;
+      case 'position_open_done': progSet(`p-${i}-pos`, 'running', `${ev.bandIndex + 1}/${ev.bands} open`); break;
+      case 'deposit_lock_start': case 'lock_start': progSet(`p-${i}-pos`, 'running', `${ev.bandIndex + 1}/${ev.bands} locking`); break;
+      case 'lock_exists': case 'lock_done': progSet(`p-${i}-pos`, 'running', `${ev.bandIndex + 1}/${ev.bands} locked ${ev.txId ? txLink(ev.txId) : ''}`); break;
+      case 'pool_done': progSet(`p-${i}-pos`, 'done', `${ev.bands} locked`); progSet(`p-${i}`, 'done'); break;
       case 'pool_failed': progSet(`p-${i}`, 'failed', esc(ev.error || '')); break;
       default: break;
     }
@@ -912,6 +916,7 @@
           quotes: plan.quotes.map((q) => ({ mint: q.mint, supplyPercent: q.supplyPercent })),
           whirlpoolsConfig: state.config,
           tickSpacing: state.tickSpacing,
+          ladderSteps: state.ladderSteps,
           priorResults: state.launch?.results || [],
         },
       });
@@ -919,7 +924,7 @@
       stopProgressPolling();
       state.launch = { results: r.results, plan: r.plan, feeRate: r.feeRate, tickSpacing: r.tickSpacing, whirlpoolsConfig: r.whirlpoolsConfig, mcap };
       persist();
-      r.results.forEach((res, i) => { progSet(`p-${i}`, 'done'); progSet(`p-${i}-pool`, 'done', acctLink(res.poolId)); progSet(`p-${i}-pos`, 'done', acctLink(res.positionMint)); progSet(`p-${i}-lock`, 'done', txLink(res.lockTxId)); });
+      r.results.forEach((res, i) => { progSet(`p-${i}`, 'done'); progSet(`p-${i}-pool`, 'done', acctLink(res.poolId)); progSet(`p-${i}-pos`, 'done', `${(res.positions || []).length} locked`); });
       renderLaunchResults();
       setPill('#launchState', `${r.results.length} pools locked`, 'ok');
       setMsg('#launchMsg', `Every position is permanently locked. Your token page: <a href="/token/${esc(token.mint)}" class="mono">${esc(location.host)}/token/${short(token.mint, 6)}</a>. Enter your wallet below to receive the locked positions, the un-pooled supply and the leftover SOL.`, 'ok');
@@ -950,8 +955,8 @@
     $('#launchResults').classList.remove('hidden');
     $('#launchResults').innerHTML = L.results.map((r) => `<div class="res pop">
       <div class="n">${esc(r.quoteSymbol)}${r.forced ? ' <i class="fas fa-lock" style="font-size:9px;color:var(--gold)"></i>' : ''} <span>· ${fmtPct(r.supplyPercent)} · opened ${fmtUsd(r.launchPriceUsd)}</span></div>
-      <span class="lk${r.locked ? '' : ' bad'}"><i class="fas fa-${r.locked ? 'lock' : 'exclamation-triangle'}"></i> ${r.locked ? 'locked' : 'not locked'}</span>
-      <div class="links">pool ${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="${jupUrl(r.quoteMint, state.token?.mint || '')}">jup</a> · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a> · position ${acctLink(r.positionMint)}</div>
+      <span class="lk${r.locked ? '' : ' bad'}"><i class="fas fa-${r.locked ? 'lock' : 'exclamation-triangle'}"></i> ${r.locked ? `${(r.positions || [r]).length} locked` : `${(r.positions || []).filter((p) => p.locked).length}/${r.bandCount || (r.positions || []).length || 1} locked`}</span>
+      <div class="links">pool ${acctLink(r.poolId)} · <a target="_blank" rel="noopener" href="${jupUrl(r.quoteMint, state.token?.mint || '')}">jup</a> · <a target="_blank" rel="noopener" href="https://www.orca.so/pools/${esc(r.poolId)}">orca</a> · ${(r.positions || [r]).length} band${(r.positions || [r]).length === 1 ? '' : 's'}</div>
       <span class="tx">${txLink(r.lockTxId)}</span>
     </div>`).join('');
   }
@@ -983,8 +988,8 @@
     setMsg('#finishMsg', '');
     setPill('#finishState', 'running', 'warn');
     updateGates();
-    const positions = state.launch.results.filter((r) => r.locked && r.positionMint).map((r) => ({ positionMint: r.positionMint, quoteSymbol: r.quoteSymbol }));
-    $('#finishProg').innerHTML = positions.map((p) => progRow(`f-${p.positionMint}`, `locked position (${esc(p.quoteSymbol)}) → your wallet`)).join('')
+    const positions = state.launch.results.flatMap((r) => (r.positions && r.positions.length ? r.positions : [r]).filter((p) => p.locked && p.positionMint).map((p) => ({ positionMint: p.positionMint, quoteSymbol: r.quoteSymbol })));
+    $('#finishProg').innerHTML = positions.map((p, idx) => progRow(`f-${p.positionMint}`, `locked position ${idx + 1}/${positions.length} (${esc(p.quoteSymbol)}) → your wallet`)).join('')
       + progRow('f-tokens', 'sweep un-pooled tokens') + progRow('f-sol', 'sweep leftover SOL');
     stopBalancePolling();
     startProgressPolling(onFinishEvent);
@@ -1106,6 +1111,7 @@
       state.quotes = saved.quotes || {};
       state.customQuotes = saved.customQuotes || [];
       state.tickSpacing = saved.tickSpacing || null;
+      state.ladderSteps = Math.max(10, Math.min(1000, Number(saved.ladderSteps) || 10));
       state.config = saved.config || null;
       state.launch = saved.launch || null;
       state.finish = saved.finish || null;
@@ -1117,6 +1123,7 @@
       }
       $('#destWallet').value = state.destWallet;
     }
+    const ladderEl = $('#ladder'); if (ladderEl) ladderEl.value = String(state.ladderSteps);
     try {
       const stash = JSON.parse(sessionStorage.getItem(SESSION_SECRET_KEY) || 'null');
       if (stash && state.wallet && stash.publicKey === state.wallet.publicKey) state.wallet.secretKey = stash.secretKey;
@@ -1134,10 +1141,10 @@
     if (state.launch?.results?.length) {
       buildLaunchTree({ quotes: state.launch.results.map((r) => ({ mint: r.quoteMint, supplyPercent: r.supplyPercent })) });
       state.launch.results.forEach((res, i) => {
+        const done = (res.positions || []).filter((p) => p.locked).length;
         progSet(`p-${i}`, res.locked ? 'done' : 'failed');
         progSet(`p-${i}-pool`, res.poolId ? 'done' : 'pending', acctLink(res.poolId));
-        progSet(`p-${i}-pos`, res.positionMint ? 'done' : 'pending', acctLink(res.positionMint));
-        progSet(`p-${i}-lock`, res.locked ? 'done' : 'pending', txLink(res.lockTxId));
+        progSet(`p-${i}-pos`, res.locked ? 'done' : 'pending', `${done}/${res.bandCount || (res.positions || []).length || 1} locked`);
       });
       renderLaunchResults();
       setPill('#launchState', state.launch.partial ? 'partial · resume' : `${state.launch.results.length} pools locked`, state.launch.partial ? 'warn' : 'ok');

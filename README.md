@@ -20,8 +20,10 @@ price), fund a throwaway wallet, and press Launch:
    `WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb`; fee tiers are read live
    from the config, 1% by default) — cheap dynamic tick arrays, no
    per-pool dynamic-fee machinery;
-3. opens one single-sided Token-2022 position per pool holding that
-   quote's share of the supply;
+3. splits each pool's share of the supply into a **ladder** of stacked
+   price bands (10 to 1000 steps, equal tokens per band, starting just
+   above the launch price — a pump.fun-style curve, but steeper) and opens
+   one single-sided Token-2022 position per band;
 4. **permanently locks** every position with Orca's native
    `lock_position` (`LockType::Permanent`) — the position keeps earning
    fees but its liquidity can never be withdrawn;

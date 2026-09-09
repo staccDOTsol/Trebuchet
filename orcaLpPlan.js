@@ -387,6 +387,73 @@ export function sqrtPriceX64ToPrice(sqrtPriceX64, decimalsA, decimalsB) {
   return sqrt * sqrt * 10 ** (decimalsA - decimalsB);
 }
 
+// ---------------------------------------------------------------------------
+// Ladder: one pool's tokens split into stacked price bands
+// ---------------------------------------------------------------------------
+//
+// A single position from the launch price to infinity is a constant-product
+// curve: the first buyers take fat slices cheaply. A ladder stacks N bands
+// up the price axis with EQUAL tokens in each, so every step up costs the
+// same number of tokens no matter how cheap the step is — the price moves
+// much faster on the first buys than a flat curve, and no single early buy
+// can scoop more than one band before it pays the next band's price.
+//
+// Bands are equal-width in tick (log-price) space starting just above the
+// launch price. Width is chosen so N bands reach ~1000x, never narrower than
+// one tick spacing; with very many steps the ladder simply climbs further.
+export const LADDER_MIN_STEPS = 1;
+export const LADDER_MAX_STEPS = 1000;
+export const LADDER_TOP_MULTIPLE = 1000;
+const TICKS_TO_TOP = Math.log(LADDER_TOP_MULTIPLE) / Math.log(1.0001); // ~69078
+
+export function normalizeLadderSteps(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return LADDER_MIN_STEPS;
+  return Math.max(LADDER_MIN_STEPS, Math.min(LADDER_MAX_STEPS, v));
+}
+
+/**
+ * Tick ranges for the ladder. Returns [{ bandIndex, tickLower, tickUpper,
+ * sharePercent, multipleFrom, multipleTo }], lowest price first. Bands that
+ * would run past the tick bounds are folded into the last one.
+ */
+export function ladderTickRanges({ tokenIsA, currentTick, tickSpacing, steps }) {
+  const n = normalizeLadderSteps(steps);
+  if (n === 1) {
+    const r = singleSidedTickRange({ tokenIsA, currentTick, tickSpacing });
+    return [{ bandIndex: 0, ...r, sharePercent: 100, multipleFrom: 1, multipleTo: null }];
+  }
+  if (isFullRangeOnlyTickSpacing(tickSpacing)) throw new Error('full-range-only tick spacing cannot host a ladder');
+  const [minTick, maxTick] = fullRangeTicks(tickSpacing);
+  const width = Math.max(tickSpacing, Math.round(TICKS_TO_TOP / n / tickSpacing) * tickSpacing);
+  const share = 100 / n;
+  const bands = [];
+  const below = initializableTickBelow(currentTick, tickSpacing);
+  if (tokenIsA) {
+    const start = below + tickSpacing; // strictly above the current tick
+    if (start >= maxTick) throw new Error('price too high for a single-sided ladder');
+    for (let k = 0; k < n; k++) {
+      const lo = start + k * width;
+      if (lo >= maxTick) { bands[bands.length - 1].sharePercent += share * (n - k); bands[bands.length - 1].tickUpper = maxTick; bands[bands.length - 1].multipleTo = null; break; }
+      const hi = k === n - 1 ? maxTick : Math.min(maxTick, lo + width);
+      bands.push({ bandIndex: bands.length, tickLower: lo, tickUpper: hi, sharePercent: share, multipleFrom: 1.0001 ** (lo - start), multipleTo: hi === maxTick ? null : 1.0001 ** (hi - start) });
+    }
+  } else {
+    const end = below; // at or below the current tick: holds only token B
+    if (end <= minTick) throw new Error('price too low for a single-sided ladder');
+    for (let k = 0; k < n; k++) {
+      const hi = end - k * width;
+      if (hi <= minTick) { bands[bands.length - 1].sharePercent += share * (n - k); bands[bands.length - 1].tickLower = minTick; bands[bands.length - 1].multipleTo = null; break; }
+      const lo = k === n - 1 ? minTick : Math.max(minTick, hi - width);
+      bands.push({ bandIndex: bands.length, tickLower: lo, tickUpper: hi, sharePercent: share, multipleFrom: 1.0001 ** (end - hi), multipleTo: lo === minTick ? null : 1.0001 ** (end - lo) });
+    }
+  }
+  // Fix float drift so the shares sum to exactly 100.
+  const sum = bands.reduce((a, b) => a + b.sharePercent, 0);
+  bands[bands.length - 1].sharePercent += 100 - sum;
+  return bands;
+}
+
 /** Pick the launched-token side of a pool given the known quote set. */
 export function classifyPoolSides(mintA, mintB, quoteMints = KNOWN_QUOTE_MINTS) {
   const aIsQuote = quoteMints.has(mintA);
@@ -417,22 +484,36 @@ export function jupiterSwapUrl(sellMint, buyMint) {
 //   quote-side ATA (never funded, rent)    ~0.0021 SOL
 //   tx fees + priority                     ~0.0015 SOL
 // Rounded up to 0.035 per pool, plus the token mint itself and a buffer.
-export const ORCA_COST_PER_POOL_SOL = 0.035;
+// Split per pool: the pool itself (whirlpool + vaults + first tick arrays +
+// quote ATA) and each locked position (Token-2022 position mint + position +
+// token account + LockConfig + tick-array growth + fees).
+export const ORCA_COST_PER_POOL_SOL = 0.021;
+export const ORCA_COST_PER_POSITION_SOL = 0.014;
 export const ORCA_COST_BASE_SOL = 0.01;
 export const ORCA_SAFETY_BUFFER_PCT = 0.2;
+// Rough wall-clock: one pool create tx, then two txs per position, ~4s each.
+export const ORCA_SECONDS_PER_TX = 4;
 
-export function estimateOrcaLaunchSol({ poolCount, tokenCreateSol = 0.05 }) {
+export function estimateOrcaLaunchSol({ poolCount, positionsPerPool = 1, tokenCreateSol = 0.05 }) {
   const pools = Math.max(0, Number(poolCount) || 0);
-  const raw = ORCA_COST_BASE_SOL + tokenCreateSol + pools * ORCA_COST_PER_POOL_SOL;
+  const perPool = Math.max(1, normalizeLadderSteps(positionsPerPool));
+  const positions = pools * perPool;
+  const raw = ORCA_COST_BASE_SOL + tokenCreateSol + pools * ORCA_COST_PER_POOL_SOL + positions * ORCA_COST_PER_POSITION_SOL;
   // Round away float noise before the ceil so 0.045 * 1.2 is 0.054, not 0.055.
   const withBuffer = Math.round(raw * (1 + ORCA_SAFETY_BUFFER_PCT) * 1e9) / 1e9;
+  const txCount = 4 + pools + positions * 2;
   return {
     poolCount: pools,
+    positionsPerPool: perPool,
+    positionCount: positions,
     perPoolSol: ORCA_COST_PER_POOL_SOL,
+    perPositionSol: ORCA_COST_PER_POSITION_SOL,
     tokenCreateSol,
     baseSol: ORCA_COST_BASE_SOL,
     rawSol: Math.round(raw * 1e6) / 1e6,
     bufferPct: ORCA_SAFETY_BUFFER_PCT,
     totalSol: Math.ceil(withBuffer * 1000) / 1000,
+    txCount,
+    estMinutes: Math.ceil((txCount * ORCA_SECONDS_PER_TX) / 60),
   };
 }

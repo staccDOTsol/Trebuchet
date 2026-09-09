@@ -68,6 +68,8 @@ import {
   normalizeOrcaFeeTiers,
   normalizeOrcaQuotes,
   singleSidedTickRange,
+  ladderTickRanges,
+  normalizeLadderSteps,
   sqrtPriceX64ToPrice,
   classifyPoolSides,
   estimateOrcaLaunchSol,
@@ -358,10 +360,12 @@ export async function createOrcaPoolsAndLock({
   quotes,
   whirlpoolsConfig = DEFAULT_WHIRLPOOLS_CONFIG,
   tickSpacing,
+  ladderSteps = 1,
   priorResults = [],
   onProgress = () => {},
 }) {
   const progress = (event) => { try { onProgress(event); } catch (_) { /* best-effort */ } };
+  const steps = normalizeLadderSteps(ladderSteps);
   const ownerKeypair = Keypair.fromSecretKey(Uint8Array.from(tempWalletSecretKey));
   const owner = ownerKeypair.publicKey;
   const connection = makeConnection();
@@ -423,7 +427,7 @@ export async function createOrcaPoolsAndLock({
     quoteMeta.push({ ...q, ...described, priceUsd, decimals: info.decimals, program: programFor(info), mintInfo: info });
   }
 
-  progress({ stage: 'orca_plan', quotes: quoteMeta.map((q) => ({ mint: q.mint, symbol: q.symbol, supplyPercent: q.supplyPercent })), tickSpacing: ts, feeRate: tier.feeRate });
+  progress({ stage: 'orca_plan', quotes: quoteMeta.map((q) => ({ mint: q.mint, symbol: q.symbol, supplyPercent: q.supplyPercent })), tickSpacing: ts, feeRate: tier.feeRate, ladderSteps: steps });
 
   const results = [];
   let wsolAtaTouched = false;
@@ -467,6 +471,10 @@ export async function createOrcaPoolsAndLock({
       launchPriceInQuote: tokenIsA ? priceBPerA.toNumber() : new Decimal(1).div(priceBPerA).toNumber(),
       poolId: prior?.poolId || null,
       createPoolTxId: prior?.createPoolTxId || null,
+      ladderSteps: steps,
+      // One entry per ladder band. The top-level position fields below
+      // mirror band 0 for older readers of this shape.
+      positions: Array.isArray(prior?.positions) ? prior.positions.map((x) => ({ ...x })) : (prior?.positionMint ? [{ bandIndex: 0, ...prior }] : []),
       positionMint: prior?.positionMint || null,
       position: prior?.position || null,
       positionTokenAccount: prior?.positionTokenAccount || null,
@@ -501,176 +509,207 @@ export async function createOrcaPoolsAndLock({
         progress({ stage: 'pool_create_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, txId: result.createPoolTxId });
       }
 
-      // ---- 2. Position range from the pool's ACTUAL current tick --------
-      const range = singleSidedTickRange({ tokenIsA, currentTick: poolData.tickCurrentIndex, tickSpacing: ts });
-      result.tickLower = range.tickLower;
-      result.tickUpper = range.tickUpper;
+      // ---- 2. Ladder bands from the pool's ACTUAL current tick -----------
+      const bands = ladderTickRanges({ tokenIsA, currentTick: poolData.tickCurrentIndex, tickSpacing: ts, steps });
+      result.bandCount = bands.length;
 
       // ---- 3. How much of the token goes in -----------------------------
       const wantRaw = BigInt(
         supply.mul(q.supplyPercent).div(100).mul(new Decimal(10).pow(tokenMintInfo.decimals)).floor().toFixed(0),
       );
-      const haveRaw = await tokenBalanceRaw(connection, tokenAta, tokenProgram);
-      // A resumed launch may have already deposited some pools; never try
-      // to deposit more than the wallet still holds.
-      const amountRaw = haveRaw < wantRaw ? haveRaw : wantRaw;
-      result.tokenAmountRaw = amountRaw.toString();
+      result.tokenAmountRaw = wantRaw.toString();
+      // Per-band amounts; the last band takes the rounding remainder.
+      const bandWant = bands.map((b) => (wantRaw * BigInt(Math.round(b.sharePercent * 1e6))) / 100000000n);
+      bandWant[bandWant.length - 1] += wantRaw - bandWant.reduce((a, b) => a + b, 0n);
 
       const tokenExtensionCtx = await TokenExtensionUtil.buildTokenExtensionContextForPool(
         ctx.fetcher, mintA, mintB, IGNORE_CACHE,
       );
+      const tokenOwnerAccountA = getAssociatedTokenAddressSync(mintA, owner, false, tokenIsA ? tokenProgram : q.program);
+      const tokenOwnerAccountB = getAssociatedTokenAddressSync(mintB, owner, false, tokenIsA ? q.program : tokenProgram);
+      if (mintA.equals(NATIVE_MINT) || mintB.equals(NATIVE_MINT)) wsolAtaTouched = true;
 
-      // ---- 4. Open the (Token-2022) position -----------------------------
-      let positionMintPk;
-      let positionPda;
-      let positionTokenAccount;
-      if (result.positionMint) {
-        positionMintPk = new PublicKey(result.positionMint);
-        positionPda = PDAUtil.getPosition(PROGRAM_ID, positionMintPk);
-        positionTokenAccount = getAssociatedTokenAddressSync(positionMintPk, owner, false, TOKEN_2022_PROGRAM_ID);
-      } else {
-        const positionMintKeypair = Keypair.generate();
-        positionMintPk = positionMintKeypair.publicKey;
-        positionPda = PDAUtil.getPosition(PROGRAM_ID, positionMintPk);
-        positionTokenAccount = getAssociatedTokenAddressSync(positionMintPk, owner, false, TOKEN_2022_PROGRAM_ID);
-
-        const openTx = new TransactionBuilder(connection, ctx.wallet, ctx.txBuilderOpts);
-        // Dynamic tick arrays: rent only for the ticks that get initialized.
-        for (const tick of [range.tickLower, range.tickUpper]) {
-          const startTick = TickUtil.getStartTickIndex(tick, ts);
-          openTx.addInstruction(WhirlpoolIx.initDynamicTickArrayIx(program, {
-            whirlpool: poolKey,
-            tickArrayPda: PDAUtil.getTickArray(PROGRAM_ID, poolKey, startTick),
-            startTick,
-            funder: owner,
-            idempotent: true,
-          }));
+      for (let k = 0; k < bands.length; k++) {
+        const band = bands[k];
+        const pos = result.positions[k] || (result.positions[k] = { bandIndex: k });
+        Object.assign(pos, { bandIndex: k, sharePercent: band.sharePercent, multipleFrom: band.multipleFrom, multipleTo: band.multipleTo });
+        if (pos.locked) {
+          progress({ stage: 'lock_exists', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: pos.positionMint });
+          continue;
         }
-        // Owner token accounts for both sides (the quote side stays empty
-        // but the instruction needs a real account).
-        for (const [mint, prog] of [[mintA, tokenIsA ? tokenProgram : q.program], [mintB, tokenIsA ? q.program : tokenProgram]]) {
-          const ata = getAssociatedTokenAddressSync(mint, owner, false, prog);
-          openTx.addInstruction({
-            instructions: [createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, mint, prog)],
-            cleanupInstructions: [],
-            signers: [],
-          });
-          if (mint.equals(NATIVE_MINT)) wsolAtaTouched = true;
-        }
-        openTx.addInstruction(WhirlpoolIx.openPositionWithTokenExtensionsIx(program, {
-          whirlpool: poolKey,
-          owner,
-          positionPda,
-          positionMint: positionMintPk,
-          positionTokenAccount,
-          funder: owner,
-          tickLowerIndex: range.tickLower,
-          tickUpperIndex: range.tickUpper,
-          withTokenMetadataExtension: true,
-        }));
-        openTx.addSigner(positionMintKeypair);
 
-        progress({ stage: 'position_open_start', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: positionMintPk.toBase58() });
-        result.positionMint = positionMintPk.toBase58();
-        result.position = positionPda.publicKey.toBase58();
-        result.positionTokenAccount = positionTokenAccount.toBase58();
-        result.openTxId = await execute(ctx, openTx, {
-          label: `orca open position ${q.symbol}`,
-          alreadyDone: () => accountExists(connection, positionPda.publicKey),
-        });
-        progress({ stage: 'position_open_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: result.positionMint, txId: result.openTxId, tickLower: range.tickLower, tickUpper: range.tickUpper });
-      }
-      result.position = positionPda.publicKey.toBase58();
-      result.positionTokenAccount = positionTokenAccount.toBase58();
-
-      // ---- 5. Deposit + lock in one transaction --------------------------
-      const lockConfigPda = PDAUtil.getLockConfig(PROGRAM_ID, positionPda.publicKey);
-      result.lockConfig = lockConfigPda.publicKey.toBase58();
-      const alreadyLocked = await accountExists(connection, lockConfigPda.publicKey);
-      if (alreadyLocked) {
-        result.locked = true;
-        progress({ stage: 'lock_exists', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: result.positionMint });
-      } else {
-        const posData = await waitFor(`position ${result.position}`, () => ctx.fetcher.getPosition(positionPda.publicKey, IGNORE_CACHE));
-        // Use the position's real range (a resumed position keeps the range
-        // it was opened with, even if the pool tick moved since).
-        const tickLower = posData.tickLowerIndex;
-        const tickUpper = posData.tickUpperIndex;
-        result.tickLower = tickLower;
-        result.tickUpper = tickUpper;
-        const freshPool = await waitFor(`pool ${result.poolId}`, () => ctx.fetcher.getPool(poolKey, IGNORE_CACHE));
-
-        const depositLockTx = new TransactionBuilder(connection, ctx.wallet, ctx.txBuilderOpts);
-        const needsDeposit = posData.liquidity.isZero();
-        if (needsDeposit) {
-          if (amountRaw <= 0n) {
-            throw new Error(`launch wallet holds no ${tokenMint} to deposit for the ${q.symbol} pool`);
-          }
-          const quote = increaseLiquidityQuoteByInputTokenWithParams({
-            inputTokenAmount: bnFromBigInt(amountRaw),
-            inputTokenMint: tokenMintPk,
-            tokenMintA: mintA,
-            tokenMintB: mintB,
-            tickCurrentIndex: freshPool.tickCurrentIndex,
-            sqrtPrice: freshPool.sqrtPrice,
-            tickLowerIndex: tickLower,
-            tickUpperIndex: tickUpper,
-            tokenExtensionCtx,
-            slippageTolerance: DEPOSIT_SLIPPAGE,
-          });
-          const quoteSideMax = tokenIsA ? quote.tokenMaxB : quote.tokenMaxA;
-          if (!quoteSideMax.isZero()) {
-            throw new Error(
-              `position for ${q.symbol} would need ${quoteSideMax.toString()} raw quote tokens — ` +
-                'the pool price moved into the range. Retry the launch.',
-            );
-          }
-          if (quote.liquidityAmount.isZero()) {
-            throw new Error(`deposit for ${q.symbol} rounds to zero liquidity; increase the allocation`);
-          }
-          result.liquidity = quote.liquidityAmount.toString();
-          depositLockTx.addInstruction(WhirlpoolIx.increaseLiquidityV2Ix(program, {
-            whirlpool: poolKey,
-            position: positionPda.publicKey,
-            positionTokenAccount,
-            positionAuthority: owner,
-            tokenMintA: mintA,
-            tokenMintB: mintB,
-            tokenOwnerAccountA: getAssociatedTokenAddressSync(mintA, owner, false, tokenIsA ? tokenProgram : q.program),
-            tokenOwnerAccountB: getAssociatedTokenAddressSync(mintB, owner, false, tokenIsA ? q.program : tokenProgram),
-            tokenVaultA: freshPool.tokenVaultA,
-            tokenVaultB: freshPool.tokenVaultB,
-            tokenProgramA: tokenIsA ? tokenProgram : q.program,
-            tokenProgramB: tokenIsA ? q.program : tokenProgram,
-            tickArrayLower: PDAUtil.getTickArrayFromTickIndex(tickLower, ts, poolKey, PROGRAM_ID).publicKey,
-            tickArrayUpper: PDAUtil.getTickArrayFromTickIndex(tickUpper, ts, poolKey, PROGRAM_ID).publicKey,
-            liquidityAmount: quote.liquidityAmount,
-            tokenMaxA: quote.tokenMaxA,
-            tokenMaxB: quote.tokenMaxB,
-          }));
+        // ---- 4. Open the (Token-2022) position for this band --------------
+        let positionMintPk;
+        let positionPda;
+        let positionTokenAccount;
+        if (pos.positionMint) {
+          positionMintPk = new PublicKey(pos.positionMint);
+          positionPda = PDAUtil.getPosition(PROGRAM_ID, positionMintPk);
+          positionTokenAccount = getAssociatedTokenAddressSync(positionMintPk, owner, false, TOKEN_2022_PROGRAM_ID);
         } else {
-          result.liquidity = posData.liquidity.toString();
-        }
-        depositLockTx.addInstruction(WhirlpoolIx.lockPositionIx(program, {
-          lockType: { permanent: {} },
-          funder: owner,
-          positionAuthority: owner,
-          position: positionPda.publicKey,
-          positionMint: positionMintPk,
-          positionTokenAccount,
-          lockConfigPda,
-          whirlpool: poolKey,
-        }));
+          const positionMintKeypair = Keypair.generate();
+          positionMintPk = positionMintKeypair.publicKey;
+          positionPda = PDAUtil.getPosition(PROGRAM_ID, positionMintPk);
+          positionTokenAccount = getAssociatedTokenAddressSync(positionMintPk, owner, false, TOKEN_2022_PROGRAM_ID);
 
-        progress({ stage: needsDeposit ? 'deposit_lock_start' : 'lock_start', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: result.positionMint, tokenAmountRaw: result.tokenAmountRaw });
-        result.lockTxId = await execute(ctx, depositLockTx, {
-          label: `orca deposit+lock ${q.symbol}`,
-          alreadyDone: () => accountExists(connection, lockConfigPda.publicKey),
-        });
-        result.depositTxId = needsDeposit ? result.lockTxId : result.depositTxId;
-        result.locked = true;
-        progress({ stage: 'lock_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, positionMint: result.positionMint, txId: result.lockTxId, lockConfig: result.lockConfig });
+          const openTx = new TransactionBuilder(connection, ctx.wallet, ctx.txBuilderOpts);
+          // Dynamic tick arrays: rent only for the ticks that get initialized.
+          for (const tick of [band.tickLower, band.tickUpper]) {
+            const startTick = TickUtil.getStartTickIndex(tick, ts);
+            openTx.addInstruction(WhirlpoolIx.initDynamicTickArrayIx(program, {
+              whirlpool: poolKey,
+              tickArrayPda: PDAUtil.getTickArray(PROGRAM_ID, poolKey, startTick),
+              startTick,
+              funder: owner,
+              idempotent: true,
+            }));
+          }
+          if (k === 0) {
+            // Owner token accounts for both sides (the quote side stays empty
+            // but the deposit instruction needs a real account).
+            for (const [mint, prog, ata] of [[mintA, tokenIsA ? tokenProgram : q.program, tokenOwnerAccountA], [mintB, tokenIsA ? q.program : tokenProgram, tokenOwnerAccountB]]) {
+              openTx.addInstruction({
+                instructions: [createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, mint, prog)],
+                cleanupInstructions: [],
+                signers: [],
+              });
+            }
+          }
+          openTx.addInstruction(WhirlpoolIx.openPositionWithTokenExtensionsIx(program, {
+            whirlpool: poolKey,
+            owner,
+            positionPda,
+            positionMint: positionMintPk,
+            positionTokenAccount,
+            funder: owner,
+            tickLowerIndex: band.tickLower,
+            tickUpperIndex: band.tickUpper,
+            withTokenMetadataExtension: true,
+          }));
+          openTx.addSigner(positionMintKeypair);
+
+          progress({ stage: 'position_open_start', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: positionMintPk.toBase58() });
+          pos.positionMint = positionMintPk.toBase58();
+          pos.position = positionPda.publicKey.toBase58();
+          pos.positionTokenAccount = positionTokenAccount.toBase58();
+          pos.tickLower = band.tickLower;
+          pos.tickUpper = band.tickUpper;
+          pos.openTxId = await execute(ctx, openTx, {
+            label: `orca open position ${q.symbol} band ${k + 1}/${bands.length}`,
+            alreadyDone: () => accountExists(connection, positionPda.publicKey),
+          });
+          progress({ stage: 'position_open_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: pos.positionMint, txId: pos.openTxId, tickLower: band.tickLower, tickUpper: band.tickUpper });
+        }
+        pos.position = positionPda.publicKey.toBase58();
+        pos.positionTokenAccount = positionTokenAccount.toBase58();
+
+        // ---- 5. Deposit + lock in one transaction ------------------------
+        const lockConfigPda = PDAUtil.getLockConfig(PROGRAM_ID, positionPda.publicKey);
+        pos.lockConfig = lockConfigPda.publicKey.toBase58();
+        const alreadyLocked = await accountExists(connection, lockConfigPda.publicKey);
+        if (alreadyLocked) {
+          pos.locked = true;
+          progress({ stage: 'lock_exists', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: pos.positionMint });
+        } else {
+          const posData = await waitFor(`position ${pos.position}`, () => ctx.fetcher.getPosition(positionPda.publicKey, IGNORE_CACHE));
+          // Use the position's real range (a resumed position keeps the range
+          // it was opened with, even if the pool tick moved since).
+          const tickLower = posData.tickLowerIndex;
+          const tickUpper = posData.tickUpperIndex;
+          pos.tickLower = tickLower;
+          pos.tickUpper = tickUpper;
+          const freshPool = await waitFor(`pool ${result.poolId}`, () => ctx.fetcher.getPool(poolKey, IGNORE_CACHE));
+
+          const depositLockTx = new TransactionBuilder(connection, ctx.wallet, ctx.txBuilderOpts);
+          const needsDeposit = posData.liquidity.isZero();
+          if (needsDeposit) {
+            // Never deposit more than the wallet still holds (a resumed
+            // launch may already have filled earlier bands / pools).
+            const haveRaw = await tokenBalanceRaw(connection, tokenAta, tokenProgram);
+            const amountRaw = haveRaw < bandWant[k] ? haveRaw : bandWant[k];
+            if (amountRaw <= 0n) {
+              throw new Error(`launch wallet holds no ${tokenMint} to deposit for the ${q.symbol} pool (band ${k + 1}/${bands.length})`);
+            }
+            pos.tokenAmountRaw = amountRaw.toString();
+            const quote = increaseLiquidityQuoteByInputTokenWithParams({
+              inputTokenAmount: bnFromBigInt(amountRaw),
+              inputTokenMint: tokenMintPk,
+              tokenMintA: mintA,
+              tokenMintB: mintB,
+              tickCurrentIndex: freshPool.tickCurrentIndex,
+              sqrtPrice: freshPool.sqrtPrice,
+              tickLowerIndex: tickLower,
+              tickUpperIndex: tickUpper,
+              tokenExtensionCtx,
+              slippageTolerance: DEPOSIT_SLIPPAGE,
+            });
+            const quoteSideMax = tokenIsA ? quote.tokenMaxB : quote.tokenMaxA;
+            if (!quoteSideMax.isZero()) {
+              throw new Error(
+                `position for ${q.symbol} (band ${k + 1}) would need ${quoteSideMax.toString()} raw quote tokens — ` +
+                  'the pool price moved into the range. Retry the launch.',
+              );
+            }
+            if (quote.liquidityAmount.isZero()) {
+              throw new Error(`deposit for ${q.symbol} band ${k + 1} rounds to zero liquidity; use fewer ladder steps or a larger allocation`);
+            }
+            pos.liquidity = quote.liquidityAmount.toString();
+            depositLockTx.addInstruction(WhirlpoolIx.increaseLiquidityV2Ix(program, {
+              whirlpool: poolKey,
+              position: positionPda.publicKey,
+              positionTokenAccount,
+              positionAuthority: owner,
+              tokenMintA: mintA,
+              tokenMintB: mintB,
+              tokenOwnerAccountA,
+              tokenOwnerAccountB,
+              tokenVaultA: freshPool.tokenVaultA,
+              tokenVaultB: freshPool.tokenVaultB,
+              tokenProgramA: tokenIsA ? tokenProgram : q.program,
+              tokenProgramB: tokenIsA ? q.program : tokenProgram,
+              tickArrayLower: PDAUtil.getTickArrayFromTickIndex(tickLower, ts, poolKey, PROGRAM_ID).publicKey,
+              tickArrayUpper: PDAUtil.getTickArrayFromTickIndex(tickUpper, ts, poolKey, PROGRAM_ID).publicKey,
+              liquidityAmount: quote.liquidityAmount,
+              tokenMaxA: quote.tokenMaxA,
+              tokenMaxB: quote.tokenMaxB,
+            }));
+          } else {
+            pos.liquidity = posData.liquidity.toString();
+          }
+          depositLockTx.addInstruction(WhirlpoolIx.lockPositionIx(program, {
+            lockType: { permanent: {} },
+            funder: owner,
+            positionAuthority: owner,
+            position: positionPda.publicKey,
+            positionMint: positionMintPk,
+            positionTokenAccount,
+            lockConfigPda,
+            whirlpool: poolKey,
+          }));
+
+          progress({ stage: needsDeposit ? 'deposit_lock_start' : 'lock_start', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: pos.positionMint, tokenAmountRaw: pos.tokenAmountRaw });
+          pos.lockTxId = await execute(ctx, depositLockTx, {
+            label: `orca deposit+lock ${q.symbol} band ${k + 1}/${bands.length}`,
+            alreadyDone: () => accountExists(connection, lockConfigPda.publicKey),
+          });
+          pos.depositTxId = needsDeposit ? pos.lockTxId : pos.depositTxId;
+          pos.locked = true;
+          progress({ stage: 'lock_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bandIndex: k, bands: bands.length, positionMint: pos.positionMint, txId: pos.lockTxId, lockConfig: pos.lockConfig });
+        }
       }
+
+      // Mirror band 0 into the legacy top-level fields and roll up the lock.
+      const first = result.positions[0];
+      if (first) {
+        Object.assign(result, {
+          positionMint: first.positionMint, position: first.position, positionTokenAccount: first.positionTokenAccount,
+          tickLower: first.tickLower, tickUpper: first.tickUpper, openTxId: first.openTxId, depositTxId: first.depositTxId,
+          lockTxId: first.lockTxId, lockConfig: first.lockConfig,
+          liquidity: result.positions.reduce((a, x) => a + BigInt(x.liquidity || 0), 0n).toString(),
+        });
+      }
+      result.locked = result.positions.length === bands.length && result.positions.every((x) => x.locked);
+      progress({ stage: 'pool_done', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, bands: bands.length });
     } catch (err) {
       progress({ stage: 'pool_failed', quoteIndex: i, quoteSymbol: q.symbol, poolId: result.poolId, error: err.message });
       err.failedQuoteIndex = i;
@@ -701,7 +740,7 @@ export async function createOrcaPoolsAndLock({
   }
 
   progress({ stage: 'orca_done', pools: results.length });
-  return { results, whirlpoolsConfig, tickSpacing: ts, feeRate: tier.feeRate };
+  return { results, whirlpoolsConfig, tickSpacing: ts, feeRate: tier.feeRate, ladderSteps: steps };
 }
 
 function failPreflight(message, quoteIndex = null) {
@@ -979,10 +1018,11 @@ export async function getLaunch(mint, { whirlpoolsConfig = DEFAULT_WHIRLPOOLS_CO
 // Estimate (re-exported so routes only import this module)
 // ---------------------------------------------------------------------------
 
-export function estimateOrcaLaunch({ quotes }) {
+export function estimateOrcaLaunch({ quotes, ladderSteps = 1 }) {
   const plan = normalizeOrcaQuotes(quotes);
-  const cost = estimateOrcaLaunchSol({ poolCount: plan.quotes.length });
-  return { plan, cost };
+  const steps = normalizeLadderSteps(ladderSteps);
+  const cost = estimateOrcaLaunchSol({ poolCount: plan.quotes.length, positionsPerPool: steps });
+  return { plan, cost, ladderSteps: steps };
 }
 
 export { DEFAULT_WHIRLPOOLS_CONFIG, ORCA_CONFIG_AUTHORITY, DISCOVERY_SINCE_UNIX };

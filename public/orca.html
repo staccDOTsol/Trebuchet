@@ -313,6 +313,12 @@ select.in{min-height:44px;font-size:14px;font-weight:500;appearance:none}
         <div class="stat"><div class="k sm">To you</div><div class="v" id="sumRem">—</div></div>
         <div class="stat"><div class="k sm">SOL</div><div class="v gold" id="sumSol">—</div></div>
       </div>
+      <div style="margin-top:14px;padding:12px;border-radius:14px;background:var(--well);border:1px solid var(--line-2)">
+        <div class="row"><div class="k">Ladder steps</div><div class="mono" style="font-size:12px;color:var(--gold)" id="ladderVal">10 per pool</div></div>
+        <input id="ladder" type="range" min="10" max="1000" step="10" value="10" style="width:100%;margin:8px 0 4px;accent-color:#ffd166">
+        <div class="note" id="ladderNote"></div>
+        <p class="tiny" style="margin-top:6px">Each pool's tokens are split into this many stacked price bands with equal tokens in each, starting just above your market cap (a pump.fun-style curve, steeper). Early buys walk up thin bands instead of scooping one flat position. More steps = smoother curve, more positions to lock (cost and time grow with it).</p>
+      </div>
       <div class="preview" id="poolPreview"></div>
       <details class="adv">
         <summary><i class="fas fa-sliders-h"></i> Fee tier &amp; Whirlpools config <i class="fas fa-chevron-down chev"></i></summary>

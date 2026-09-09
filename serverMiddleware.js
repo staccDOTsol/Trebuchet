@@ -160,6 +160,38 @@ export function apiSessionMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * Public API surface. FireFun is a public multi-user site now, so only the
+ * endpoints the Orca launcher UI actually calls are reachable. Everything
+ * else still mounted in server.js (legacy operator/desktop endpoints such as
+ * pending-wallet reveal, secret-pin, rpc-config, server-logs, launch
+ * journals, vanity grinding) is server-wide state and must never be exposed
+ * to an arbitrary visitor, so it 404s here before any handler runs.
+ *
+ * Paths are as seen by a middleware mounted at '/api' (prefix stripped).
+ */
+export const PUBLIC_API_ROUTES = new Set([
+  'GET /session',
+  'POST /generate-wallet',
+  'GET /wallet-qr',
+  'POST /check-balance',
+  'GET /lp-progress',
+  'POST /create-token',
+]);
+export const PUBLIC_API_PREFIXES = ['/orca/'];
+
+export function isPublicApiRoute(method, path) {
+  const m = String(method || '').toUpperCase();
+  if (PUBLIC_API_ROUTES.has(`${m} ${path}`)) return true;
+  return PUBLIC_API_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+// NOTE: mount at '/api' like apiSessionMiddleware.
+export function publicApiAllowlistMiddleware(req, res, next) {
+  if (isPublicApiRoute(req.method, req.path)) return next();
+  res.status(404).json({ success: false, error: 'not found' });
+}
+
 // ---------------------------------------------------------------------------
 // Static file resolution
 // ---------------------------------------------------------------------------

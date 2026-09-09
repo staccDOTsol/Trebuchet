@@ -208,6 +208,7 @@ import {
   hostCheckMiddleware,
   securityHeadersMiddleware,
   apiSessionMiddleware,
+  publicApiAllowlistMiddleware,
   resolvePublicDir,
   upload,
   API_SESSION_TOKEN,
@@ -419,6 +420,10 @@ app.get('/api/session', (_req, res) => {
 });
 
 app.use('/api', apiSessionMiddleware);
+// Public site: only the Orca launcher's endpoints are reachable (see
+// PUBLIC_API_ROUTES in serverMiddleware.js). Legacy operator endpoints below
+// stay mounted for the desktop build but 404 on the web.
+app.use('/api', publicApiAllowlistMiddleware);
 
 app.use(express.json({ limit: '5mb' }));
 

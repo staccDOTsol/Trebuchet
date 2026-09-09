@@ -35,6 +35,7 @@ import { getClaimable, buildClaimTransactions, sendSignedClaims, DEFAULT_MAX_TXS
 import {
   DEFAULT_WHIRLPOOLS_CONFIG,
   ORCA_CONFIG_AUTHORITY,
+  ORCA_CONFIG_AUTHORITIES,
   DISCOVERY_SINCE_UNIX,
   FORCED_MIN_SUPPLY_PCT,
   ORCA_MAX_PROTOCOL_FEE_RATE,
@@ -106,7 +107,7 @@ export function registerOrcaRoutes(app, deps) {
 
   app.get('/api/orca/configs', async (req, res) => {
     try {
-      const authority = isPubkeyish(req.query.authority) ? req.query.authority : ORCA_CONFIG_AUTHORITY;
+      const authority = isPubkeyish(req.query.authority) ? req.query.authority : ORCA_CONFIG_AUTHORITIES;
       const configs = await listWhirlpoolsConfigs(authority);
       res.json({ success: true, authority, configs });
     } catch (error) {

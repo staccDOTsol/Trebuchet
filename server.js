@@ -428,14 +428,31 @@ app.use(express.static(publicDir));
 
 // Routes
 // The launcher: pick quotes, start at any market cap, lock forever.
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'orca.html'));
-});
+//
+// The HTML is served with no-cache and its script/style URLs carry a hash
+// of their contents, so a redeploy can never pair a cached page with a
+// newer script (that half-loads the app: listeners bound before the first
+// missing element work, everything after it is left uninitialized).
+const ASSET_VERSION = (() => {
+  try {
+    const h = crypto.createHash('sha1');
+    for (const f of ['orca.js', 'api.js', 'orca.html']) h.update(fs.readFileSync(path.join(publicDir, f)));
+    return h.digest('hex').slice(0, 10);
+  } catch (_) { return String(Date.now()); }
+})();
+function sendLauncherPage(_req, res) {
+  let html;
+  try { html = fs.readFileSync(path.join(publicDir, 'orca.html'), 'utf8'); }
+  catch (err) { return res.status(500).send(`launcher page unavailable: ${err.message}`); }
+  html = html.replace(/(src|href)="(\/[^"]+\.(?:js|css|woff2))"/g, `$1="$2?v=${ASSET_VERSION}"`);
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+}
+app.get('/', sendLauncherPage);
 app.get('/orca', (_req, res) => res.redirect('/'));
 // Token deeplink: the same page, opened on that token's card.
-app.get('/token/:mint', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'orca.html'));
-});
+app.get('/token/:mint', sendLauncherPage);
 
 // Opt-in diagnostic endpoint for splash-video 404 debugging. It reports local
 // filesystem/process paths, so keep it unavailable in normal desktop/web runs.

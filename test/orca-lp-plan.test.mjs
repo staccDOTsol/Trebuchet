@@ -19,6 +19,8 @@ import {
   classifyPoolSides,
   estimateOrcaLaunchSol,
   isFullRangeOnlyTickSpacing,
+  ladderTickRanges,
+  normalizeLadderSteps,
 } from '../orcaLpPlan.js';
 
 const EVUL = 'EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump';
@@ -226,4 +228,45 @@ test('estimateOrcaLaunchSol scales per pool with a safety buffer', () => {
   assert.equal(estimateOrcaLaunchSol({ poolCount: 4 }).totalSol, 0.24);
   const one = estimateOrcaLaunchSol({ poolCount: 1, tokenCreateSol: 0 });
   assert.equal(one.totalSol, 0.054);
+});
+
+// ---------------------------------------------------------------------------
+// Ladder
+// ---------------------------------------------------------------------------
+
+test('ladder: equal-share bands stacked above the price, folding at the tick bounds', () => {
+  assert.equal(normalizeLadderSteps(0), 1);
+  assert.equal(normalizeLadderSteps(5000), 1000);
+  assert.equal(normalizeLadderSteps('40'), 40);
+  const one = ladderTickRanges({ tokenIsA: true, currentTick: 13933, tickSpacing: 128, steps: 1 });
+  assert.deepEqual(one.map((b) => [b.tickLower, b.tickUpper, b.sharePercent]), [[13952, 443520, 100]]);
+  const ten = ladderTickRanges({ tokenIsA: true, currentTick: 13933, tickSpacing: 128, steps: 10 });
+  assert.equal(ten.length, 10);
+  assert.equal(ten[0].tickLower, 13952);
+  for (let i = 1; i < 10; i++) assert.equal(ten[i].tickLower, ten[i - 1].tickUpper);
+  assert.equal(ten[9].tickUpper, 443520);
+  assert.ok(ten.every((b) => b.tickLower % 128 === 0 && b.tickUpper % 128 === 0));
+  assert.equal(Math.round(ten.reduce((a, b) => a + b.sharePercent, 0) * 1e6) / 1e6, 100);
+  assert.ok(ten[0].multipleTo > 1.9 && ten[0].multipleTo < 2.1, 'first band spans ~2x');
+  // Token on the B side: bands go DOWN in tick from the current price.
+  const b = ladderTickRanges({ tokenIsA: false, currentTick: -58647, tickSpacing: 128, steps: 10 });
+  assert.equal(b[0].tickUpper, -58752);
+  assert.ok(b[0].tickLower < b[0].tickUpper);
+  assert.equal(b[9].tickLower, -443520);
+  // A thousand steps never go narrower than one tick spacing.
+  const k = ladderTickRanges({ tokenIsA: true, currentTick: 0, tickSpacing: 128, steps: 1000 });
+  assert.equal(k.length, 1000);
+  assert.ok(k.every((x) => x.tickUpper - x.tickLower >= 128));
+  // Near the top of the range the remaining steps fold into the last band.
+  const top = ladderTickRanges({ tokenIsA: true, currentTick: 440000, tickSpacing: 128, steps: 10 });
+  assert.ok(top.length < 10);
+  assert.equal(Math.round(top.reduce((a, x) => a + x.sharePercent, 0)), 100);
+  assert.throws(() => ladderTickRanges({ tokenIsA: true, currentTick: 0, tickSpacing: 32896, steps: 10 }), /full-range/);
+});
+
+test('estimate scales with positions per pool', () => {
+  const e = estimateOrcaLaunchSol({ poolCount: 7, positionsPerPool: 10 });
+  assert.equal(e.positionCount, 70);
+  assert.equal(e.txCount, 4 + 7 + 140);
+  assert.ok(e.totalSol > estimateOrcaLaunchSol({ poolCount: 7 }).totalSol);
 });

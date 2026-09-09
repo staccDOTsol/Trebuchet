@@ -151,8 +151,8 @@ export function registerOrcaRoutes(app, deps) {
 
   app.post('/api/orca/estimate', (req, res) => {
     try {
-      const { plan, cost } = estimateOrcaLaunch({ quotes: req.body?.quotes });
-      res.json({ success: true, plan, cost });
+      const { plan, cost, ladderSteps } = estimateOrcaLaunch({ quotes: req.body?.quotes, ladderSteps: req.body?.ladderSteps });
+      res.json({ success: true, plan, cost, ladderSteps });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
     }
@@ -173,6 +173,7 @@ export function registerOrcaRoutes(app, deps) {
         quotes,
         whirlpoolsConfig,
         tickSpacing,
+        ladderSteps,
         priorResults,
       } = req.body || {};
 
@@ -205,6 +206,7 @@ export function registerOrcaRoutes(app, deps) {
         targetMarketCapUsd,
         whirlpoolsConfig: config,
         tickSpacing: Number(tickSpacing),
+        ladderSteps: Number(ladderSteps) || 1,
         quotes: plan.quotes,
       };
       launchJournal.upsertForWallet(
@@ -227,6 +229,7 @@ export function registerOrcaRoutes(app, deps) {
         quotes: plan.quotes,
         whirlpoolsConfig: config,
         tickSpacing: Number(tickSpacing),
+        ladderSteps: Number(ladderSteps) || 1,
         priorResults: Array.isArray(priorResults) ? priorResults : [],
         onProgress,
       });
